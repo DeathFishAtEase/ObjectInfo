@@ -1,0 +1,11 @@
+Release
+*.vcxproj.user
+*.vcxproj.filters
+*.sdf
+*.suo
+*.sln
+.vs
+.cproject
+.project
+
+
