@@ -4,6 +4,7 @@
 #include <GeneralDefinitions.h>
 #include <GeneralStructures.h>
 #include <ArrayClasses.h>
+#include <Helpers\CompileTime.h>
 
 //forward declarations
 class TechnoClass;

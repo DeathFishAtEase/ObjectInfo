@@ -381,8 +381,8 @@ SwizzleManagerClass& SwizzleManagerClass::Instance = *reinterpret_cast<SwizzleMa
 #include <TActionClass.h>
 DECL(TActionClass, 0xB0E658);
 
-#include <TagClass.h>
-DECL(TagClass, 0xB0E720);
+//#include <TagClass.h>
+//DECL(TagClass, 0xB0E720);
 
 #include <TagTypeClass.h>
 DECL(TagTypeClass, 0xB0E780);
@@ -424,8 +424,8 @@ DECL(TerrainTypeClass, 0xA8E318);
 #include <TiberiumClass.h>
 DECL(TiberiumClass, 0xB0F4E8);
 
-#include <TriggerClass.h>
-DECL(TriggerClass, 0xA8EAE8);
+//#include <TriggerClass.h>
+//DECL(TriggerClass, 0xA8EAE8);
 
 #include <TriggerTypeClass.h>
 DECL(TriggerTypeClass, 0x8B4178);

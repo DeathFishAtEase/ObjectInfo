@@ -1,15 +1,32 @@
 #include <YRPP.h>
 #include <Helpers/Macro.h>
 #include <TagTypeClass.h>
+#include <TriggerTypeClass.h>
 #include "command.h"
 #include "GeneralUtils.h"
 #include "Rules.h"
 #include "ToolTipManager.h"
+#include <map>
 
 #define COLOR_ALLIEDTT 0xA69F
 #define COLOR_SOVIETTT 0xFFE0
 
 bool bObjectInfo = false;
+
+char FinalStringBuffer[0x1000];
+static void LogGame(const char* pFormat, ...)
+{
+	JMP_STD(0x4068E0);
+}
+
+static void Log(const char* pFormat, ...)
+{
+	va_list args;
+	va_start(args, pFormat);
+	vsprintf_s(FinalStringBuffer, pFormat, args);
+	LogGame(FinalStringBuffer);
+	va_end(args);
+}
 
 wchar_t* char2wchar(const char* cchar)
 {
@@ -94,12 +111,116 @@ public:
 	}
 };
 
+class TriggerInfoClass : public CommandClass
+{
+public:
+	//CommandClass
+	virtual const char* GetName() const override
+	{
+		return "Dump Trigger Info";
+	}
+	virtual const wchar_t* GetUIName() const override
+	{
+		return GeneralUtils::LoadStringUnlessMissing("TXT_DUMP_TRIGGER_INFO", L"Dump Trigger Info");
+	}
+
+	virtual const wchar_t* GetUICategory() const override
+	{
+		return GeneralUtils::LoadStringUnlessMissing("TXT_DEVELOPMENT", L"Development");
+	}
+
+	virtual const wchar_t* GetUIDescription() const override
+	{
+		return GeneralUtils::LoadStringUnlessMissing("TXT_DUMP_TRIGGER_INFO_DESC", L"Dump Trigger Info to debug.log.");
+	}
+
+	virtual void Execute(DWORD dwUnk) const override
+	{
+		auto DumpTrigger = [](auto self, TriggerClass* pTrigger, int counter) -> void {
+			if (pTrigger) {
+				Log("[Trigger Info]         Trigger: %s (%s), %s\n", pTrigger->Type->get_ID(), pTrigger->Type->Name, pTrigger->Enabled ? "Enabled" : "Disabled");
+				self(self, pTrigger->NextTrigger, counter + 1);
+			}
+			};
+		auto DumpTag = [DumpTrigger](TagClass* pTag) {
+			if (pTag) {
+				Log("[Trigger Info]     Tag: %s (%s)\n", pTag->Type->get_ID(), pTag->Type->Name);
+				DumpTrigger(DumpTrigger, pTag->FirstTrigger, 0);
+			}
+			};
+		auto DumpTags = [DumpTag](DynamicVectorClass<TagClass*>* tagArray) {
+			for (int i = 0; i < tagArray->Count; i++) {
+				DumpTag(tagArray->GetItem(i));
+			}
+			};
+
+		Log("[Trigger Info] ================== Array_Logic ==================\n");
+		DumpTags(TagClass::Array_Logic);
+		Log("[Trigger Info] ================== Array_House ==================\n");
+		for (int i = 0; i < HouseClass::Array->Count; i++) {
+			if (auto pHouse = HouseClass::Array->GetItem(i)) {
+				if (pHouse->RelatedTags.Count > 0) {
+					Log("[Trigger Info] %s (%s):\n", pHouse->get_ID(), pHouse->PlainName);
+					DumpTags(&pHouse->RelatedTags);
+				}
+			}
+		}
+		Log("[Trigger Info] ================== Array_Object ==================\n");
+		std::map<TagClass*, std::vector<TechnoClass*>> ObjectTags;
+		for (auto pTechno : *TechnoClass::Array) {
+			if (pTechno->AttachedTag) {
+				ObjectTags[pTechno->AttachedTag].push_back(pTechno);
+			}
+		}
+		for (auto& objTag : ObjectTags) {
+			for (auto& pTechno : objTag.second) {
+				auto pType = pTechno->GetTechnoType();
+				Log("[Trigger Info] %s, UID: %d", pType->ID, (int)pTechno->UniqueID);
+				if (pTechno->IsOnMap && !pTechno->InLimbo && pTechno->IsAlive) {
+					Log(", Location: (%d, %d):\n", (int)pTechno->GetMapCoords().X, (int)pTechno->GetMapCoords().Y);
+				}
+				else
+					Log(":\n");
+			}
+			DumpTag(objTag.first);
+		}
+		Log("[Trigger Info] ================== Array_Cell ==================\n");
+		std::map<TagClass*, std::vector<CellStruct>> CellTags;
+		for (int i = 0; i < MapClass::Instance->TaggedCells.Count; i++) {
+			auto mapCoord = MapClass::Instance->TaggedCells.GetItem(i);
+			if (auto pCell = MapClass::Instance->TryGetCellAt(mapCoord)) {
+				if (pCell->AttachedTag) {
+					bool add = true;
+					for (auto& mp : CellTags[pCell->AttachedTag]) {
+						if (mp == pCell->MapCoords) {
+							add = false;
+						}
+					}
+					if (add) {
+						CellTags[pCell->AttachedTag].push_back(pCell->MapCoords);
+					}
+				}
+			}
+		}
+		for (auto& cellTag : CellTags) {
+			for (auto& mapCoord : cellTag.second) {
+				Log("[Trigger Info] Location: (%d, %d):\n", mapCoord.X, mapCoord.Y);
+			}
+			DumpTag(cellTag.first);
+		}
+
+		wchar_t* buffer = L"Trigger Info Dumped";
+		MessageListClass::Instance->PrintMessage(buffer);
+	}
+};
+
 DEFINE_HOOK(533066, CommandClassCallback_Register, 6)
 {
 	// Load it after Ares'
 
 	MakeCommand<ObjectInfoClass>();
 	MakeCommand<ObjectInfoChangeClass>();
+	MakeCommand<TriggerInfoClass>();
 
 	return 0;
 }
@@ -438,7 +559,12 @@ DEFINE_HOOK(4F4583, GScreenClass_DrawOnTop_TheDarkSideOfTheMoon, 6)
 								}
 							}
 							if (pTeam->CurrentScript->idxCurrentLine >= 0)
-								append("Current Script [Line = Action, Argument]: %d = %d, %d", pTeam->CurrentScript->idxCurrentLine, pTeam->CurrentScript->Type->ScriptActions[pTeam->CurrentScript->idxCurrentLine].Action, pTeam->CurrentScript->Type->ScriptActions[pTeam->CurrentScript->idxCurrentLine].Argument);
+							{
+								ScriptActionNode sNode;
+								pTeam->CurrentScript->GetCurrentAction(&sNode);
+								append("Current Script [Line = Action, Argument]: %d = %d, %d", pTeam->CurrentScript->idxCurrentLine, sNode.Action, sNode.Argument);
+
+							}
 							else if (!missingUnit)
 								append("Current Script [Line = Action, Argument]: %d", pTeam->CurrentScript->idxCurrentLine);
 							else
@@ -629,21 +755,31 @@ DEFINE_HOOK(4F4583, GScreenClass_DrawOnTop_TheDarkSideOfTheMoon, 6)
 							else
 								sprintf(veterancy, "%s", "N/A");
 							append("Veterancy = %s (%.2f)", veterancy, pFoot->Veterancy.Veterancy);
+							display();
 						}
-
-						display();
 					}
 					if (ObjectInfoDisplay::CanDisplay("tag", name) || allDisplay)
 					{
 						if (pFoot->AttachedTag)
 						{
 							append("Tag = %s, InstanceCount = %d", pFoot->AttachedTag->Type->get_ID(), pFoot->AttachedTag->InstanceCount);
-							display();
+							display();	
+							if (pFoot->AttachedTag->FirstTrigger)
+							{
+								auto pTrigger = pFoot->AttachedTag->FirstTrigger;
+
+								auto displayTrigger = [append, display](auto self, TriggerClass* trigger, int counter) -> void {
+									if (trigger) {
+										append("Trigger %d = %s", counter, trigger->Type->get_ID());
+										display();
+										self(self, trigger->NextTrigger,  counter + 1);
+									}
+									};
+								displayTrigger(displayTrigger, pTrigger, 0);				
+							}
 						}
 					}
-
 				}
-
 			};
 			auto printBuilding = [&append, &display, &displayWide,&displayToopTip, &getMissionName](BuildingClass* pBuilding)
 			{
