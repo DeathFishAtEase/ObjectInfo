@@ -12,6 +12,18 @@ class FactoryClass;
 class InfantryClass;
 class LightSourceClass;
 
+enum class BStateType : unsigned int
+{
+	Construction = 0x0,
+	Idle = 0x1,
+	Active = 0x2,
+	Full = 0x3,
+	Aux1 = 0x4,
+	Aux2 = 0x5,
+	Count = 0x6,
+	None = 0xFFFFFFFF,
+};
+
 class NOVTABLE BuildingClass : public TechnoClass
 {
 public:
@@ -35,7 +47,7 @@ public:
 	//MissionClass
 	//TechnoClass
 	virtual void Destroyed(ObjectClass* Killer) RX;
-	virtual void vt_entry_490(DWORD dwUnk, DWORD dwUnk2) RX;
+	virtual bool ForceCreate(CoordStruct& coord, DWORD dwUnk = 0) R0;
 
 	//BuildingClass
 	virtual CellStruct* vt_entry_4D4(CellStruct* pCellStruct, DWORD dwUnk, DWORD dwUnk2) const R0;
@@ -172,6 +184,11 @@ public:
 			}
 		}
 		return false;
+	}
+
+	void BeginMode(BStateType bType)
+	{
+		JMP_THIS(0x447780);
 	}
 
 	TechnoTypeClass* GetSecretProduction() const;

@@ -7,13 +7,41 @@
 #include "Rules.h"
 #include "ToolTipManager.h"
 #include <map>
+#include <WWMouseClass.h>
 
 #define COLOR_ALLIEDTT 0xA69F
 #define COLOR_SOVIETTT 0xFFE0
 
 bool bObjectInfo = false;
+bool bTriggerDebug = false;
+bool bPressedInButtonsLayer = false;
+bool bTriggerDebugPageEnd = false;
 
 char FinalStringBuffer[0x1000];
+wchar_t FinalStringBufferW[0x1000];
+
+#define RECT_COUNT 256
+enum CurrentMode : int
+{
+	ForceRun = 0,
+	Enable,
+	Disable,
+	Destroy,
+	Count
+};
+const int TriggerDebugStartX = 10;
+const int TriggerDebugStartY = 180;
+int TriggerDebugStartIndex = 0;
+int HoveredTriggerIndex = -100;
+int PageTriggerCount = RECT_COUNT;
+int CurrentPage = 0;
+CurrentMode Mode = ForceRun;
+int ModeIndex = -1;
+RectangleStruct TriggerDebugRect[RECT_COUNT]{0};
+RectangleStruct TriggerDebugMode[Count]{0};
+RectangleStruct TriggerDebugPageDown{ 0 };
+RectangleStruct TriggerDebugPageUp{ 0 };
+
 static void LogGame(const char* pFormat, ...)
 {
 	JMP_STD(0x4068E0);
@@ -25,6 +53,24 @@ static void Log(const char* pFormat, ...)
 	va_start(args, pFormat);
 	vsprintf_s(FinalStringBuffer, pFormat, args);
 	LogGame(FinalStringBuffer);
+	va_end(args);
+}
+
+static const char* Format(const char* pFormat, ...)
+{
+	va_list args;
+	va_start(args, pFormat);
+	vsprintf_s(FinalStringBuffer, pFormat, args);
+	va_end(args);
+	return FinalStringBuffer;
+}
+
+static void Message(const wchar_t* pFormat, ...)
+{
+	va_list args;
+	va_start(args, pFormat);
+	vswprintf_s(FinalStringBufferW, pFormat, args);
+	MessageListClass::Instance->PrintMessage(FinalStringBufferW);
 	va_end(args);
 }
 
@@ -136,6 +182,11 @@ public:
 
 	virtual void Execute(DWORD dwUnk) const override
 	{
+		auto DumpAllTrigger = [](TriggerClass* pTrigger) -> void {
+			if (pTrigger) {
+				Log("[Trigger Info]     Trigger: %s (%s), %s\n", pTrigger->Type->get_ID(), pTrigger->Type->Name, pTrigger->Enabled ? "Enabled" : "Disabled");
+			}
+			};
 		auto DumpTrigger = [](auto self, TriggerClass* pTrigger, int counter) -> void {
 			if (pTrigger) {
 				Log("[Trigger Info]         Trigger: %s (%s), %s\n", pTrigger->Type->get_ID(), pTrigger->Type->Name, pTrigger->Enabled ? "Enabled" : "Disabled");
@@ -208,12 +259,109 @@ public:
 			}
 			DumpTag(cellTag.first);
 		}
+		Log("[Trigger Info] ================== All_Triggers ==================\n");
+		for (int i = 0; i < TriggerClass::Array->Count; i++) {
+			if (auto trigger = TriggerClass::Array->GetItem(i)) {
+				DumpAllTrigger(trigger);
+			}
+		}
 
-		wchar_t* buffer = L"Trigger Info Dumped";
-		MessageListClass::Instance->PrintMessage(buffer);
+		Message(L"Trigger Info Dumped");
 	}
 };
 
+class TriggerDebugClass : public CommandClass
+{
+public:
+	//CommandClass
+	virtual const char* GetName() const override
+	{
+		return "Trigger Debug Mode";
+	}
+	virtual const wchar_t* GetUIName() const override
+	{
+		return GeneralUtils::LoadStringUnlessMissing("TXT_TRIGGER_DEBUG_MODE", L"Trigger Debug Mode");
+	}
+
+	virtual const wchar_t* GetUICategory() const override
+	{
+		return GeneralUtils::LoadStringUnlessMissing("TXT_DEVELOPMENT", L"Development");
+	}
+
+	virtual const wchar_t* GetUIDescription() const override
+	{
+		return GeneralUtils::LoadStringUnlessMissing("TXT_TRIGGER_DEBUG_MODE_DESC", L"Enable Trigger Debug Mode.");
+	}
+
+	virtual void Execute(DWORD dwUnk) const override
+	{
+		bTriggerDebug = !bTriggerDebug;
+	}
+};
+
+class TriggerDebugPageUpClass : public CommandClass
+{
+public:
+	//CommandClass
+	virtual const char* GetName() const override
+	{
+		return "Trigger Debug Page Up";
+	}
+	virtual const wchar_t* GetUIName() const override
+	{
+		return GeneralUtils::LoadStringUnlessMissing("TXT_TRIGGER_DEBUG_PAGEUP", L"Trigger Debug Page Up");
+	}
+
+	virtual const wchar_t* GetUICategory() const override
+	{
+		return GeneralUtils::LoadStringUnlessMissing("TXT_DEVELOPMENT", L"Development");
+	}
+
+	virtual const wchar_t* GetUIDescription() const override
+	{
+		return GeneralUtils::LoadStringUnlessMissing("TXT_TRIGGER_DEBUG_PAGEUP_DESC", L"Trigger Debug Page Up.");
+	}
+
+	virtual void Execute(DWORD dwUnk) const override
+	{
+		if (bTriggerDebug && CurrentPage > 0)
+		{
+			CurrentPage--;
+		}
+	}
+};
+
+class TriggerDebugPageDownClass : public CommandClass
+{
+public:
+	//CommandClass
+	virtual const char* GetName() const override
+	{
+		return "Trigger Debug Page Down";
+	}
+	virtual const wchar_t* GetUIName() const override
+	{
+		return GeneralUtils::LoadStringUnlessMissing("TXT_TRIGGER_DEBUG_PAGEDOWN", L"Trigger Debug Page Down");
+	}
+
+	virtual const wchar_t* GetUICategory() const override
+	{
+		return GeneralUtils::LoadStringUnlessMissing("TXT_DEVELOPMENT", L"Development");
+	}
+
+	virtual const wchar_t* GetUIDescription() const override
+	{
+		return GeneralUtils::LoadStringUnlessMissing("TXT_TRIGGER_DEBUG_PAGEDOWN_DESC", L"Trigger Debug Page Down.");
+	}
+
+	virtual void Execute(DWORD dwUnk) const override
+	{
+		if (bTriggerDebug && !bTriggerDebugPageEnd)
+		{
+			CurrentPage++;
+		}
+	}
+};
 DEFINE_HOOK(533066, CommandClassCallback_Register, 6)
 {
 	// Load it after Ares'
@@ -221,794 +369,1068 @@ DEFINE_HOOK(533066, CommandClassCallback_Register, 6)
 	MakeCommand<ObjectInfoClass>();
 	MakeCommand<ObjectInfoChangeClass>();
 	MakeCommand<TriggerInfoClass>();
+	MakeCommand<TriggerDebugClass>();
+	MakeCommand<TriggerDebugPageUpClass>();
+	MakeCommand<TriggerDebugPageDownClass>();
 
 	return 0;
 }
 
 DEFINE_HOOK(4F4583, GScreenClass_DrawOnTop_TheDarkSideOfTheMoon, 6)
 {
-	if (!bObjectInfo)
-		return 0;
-
-	auto getMissionName = [](int mID)
+	if (bObjectInfo)
 	{
-		switch (mID)
-		{
-		case -1:
-			return "None";
-		case 0:
-			return "Sleep";
-		case 1:
-			return "Attack";
-		case 2:
-			return "Move";
-		case 3:
-			return "QMove";
-		case 4:
-			return "Retreat";
-		case 5:
-			return "Guard";
-		case 6:
-			return "Sticky";
-		case 7:
-			return "Enter";
-		case 8:
-			return "Capture";
-		case 9:
-			return "Eaten";
-		case 10:
-			return "Harvest";
-		case 11:
-			return "Area_Guard";
-		case 12:
-			return "Return";
-		case 13:
-			return "Stop";
-		case 14:
-			return "Ambush";
-		case 15:
-			return "Hunt";
-		case 16:
-			return "Unload";
-		case 17:
-			return "Sabotage";
-		case 18:
-			return "Construction";
-		case 19:
-			return "Selling";
-		case 20:
-			return "Repair";
-		case 21:
-			return "Rescue";
-		case 22:
-			return "Missile";
-		case 23:
-			return "Harmless";
-		case 24:
-			return "Open";
-		case 25:
-			return "Patrol";
-		case 26:
-			return "ParadropApproach";
-		case 27:
-			return "ParadropOverfly";
-		case 28:
-			return "Wait";
-		case 29:
-			return "AttackMove";
-		case 30:
-			return "SpyplaneApproach";
-		case 31:
-			return "SpyplaneOverfly";
-		default:
-			return "INVALID_MISSION";
-		}
-	};
-
-	for (auto pTechno : *TechnoClass::Array)
-	{
-		if (pTechno->unknown_bool_431 || pTechno->IsSelected)
-		{
-			Point2D position;
-			TacticalClass::Instance->CoordsToClient(&pTechno->GetCoords(), &position);
-
-			int offsetX = position.X + ObjectInfoDisplay::DisplayOffsetX;
-			int offsetY = position.Y + ObjectInfoDisplay::DisplayOffsetY;
-			bool opposite = false;
-			bool draw = true;
-
-			if (DSurface::Composite->GetHeight() - position.Y < 150)
+		auto getMissionName = [](int mID)
 			{
-				opposite = true;
-				offsetY = position.Y - 30;
-			}
-			if ((position.X < -80 || position.X > DSurface::Composite->GetWidth() + 80)
-				|| (position.Y < -80 || position.Y > DSurface::Composite->GetHeight() + 80))
-				draw = false;
-
-			char displayBuffer[0x100] = { 0 };
-
-			auto DrawText = [&opposite, &draw](const wchar_t* string, int& offsetX, int& offsetY, int color) {
-				if (draw)
+				switch (mID)
 				{
-					auto h = DSurface::Composite->GetHeight();
-					auto w = DSurface::Composite->GetWidth();
-
-					auto wanted = Drawing::GetTextDimensions(string);
-					wanted.Height += 2;
-
-					int exceedX = w - offsetX - wanted.Width;
-					if (exceedX >= 0)
-						exceedX = 0;
-
-					int exceedY = h - offsetY - wanted.Height;
-					if (exceedY >= 0)
-						exceedY = 0;
-
-					RectangleStruct rect = { offsetX + exceedX, offsetY, wanted.Width, wanted.Height };
-
-					DSurface::Composite->FillRect(&rect, COLOR_BLACK);
-					DSurface::Composite->DrawTextA(string, rect.X, rect.Y, color);
-
-					if (opposite)
-						offsetY -= wanted.Height;
-					else
-						offsetY += wanted.Height;
+				case -1:
+					return "None";
+				case 0:
+					return "Sleep";
+				case 1:
+					return "Attack";
+				case 2:
+					return "Move";
+				case 3:
+					return "QMove";
+				case 4:
+					return "Retreat";
+				case 5:
+					return "Guard";
+				case 6:
+					return "Sticky";
+				case 7:
+					return "Enter";
+				case 8:
+					return "Capture";
+				case 9:
+					return "Eaten";
+				case 10:
+					return "Harvest";
+				case 11:
+					return "Area_Guard";
+				case 12:
+					return "Return";
+				case 13:
+					return "Stop";
+				case 14:
+					return "Ambush";
+				case 15:
+					return "Hunt";
+				case 16:
+					return "Unload";
+				case 17:
+					return "Sabotage";
+				case 18:
+					return "Construction";
+				case 19:
+					return "Selling";
+				case 20:
+					return "Repair";
+				case 21:
+					return "Rescue";
+				case 22:
+					return "Missile";
+				case 23:
+					return "Harmless";
+				case 24:
+					return "Open";
+				case 25:
+					return "Patrol";
+				case 26:
+					return "ParadropApproach";
+				case 27:
+					return "ParadropOverfly";
+				case 28:
+					return "Wait";
+				case 29:
+					return "AttackMove";
+				case 30:
+					return "SpyplaneApproach";
+				case 31:
+					return "SpyplaneOverfly";
+				default:
+					return "INVALID_MISSION";
 				}
 			};
-			auto DrawToolTipText = [&opposite, &draw](const wchar_t* string, int& offsetX, int& offsetY, int color) {
-				if (draw)
+
+		for (auto pTechno : *TechnoClass::Array)
+		{
+			if (pTechno->unknown_bool_431 || pTechno->IsSelected)
+			{
+				Point2D position;
+				TacticalClass::Instance->CoordsToClient(&pTechno->GetCoords(), &position);
+
+				int offsetX = position.X + ObjectInfoDisplay::DisplayOffsetX;
+				int offsetY = position.Y + ObjectInfoDisplay::DisplayOffsetY;
+				bool opposite = false;
+				bool draw = true;
+
+				if (DSurface::Composite->GetHeight() - position.Y < 150)
 				{
-					wchar_t string2[0x800];
-					swprintf_s(string2, L"%s", string);
-					wchar_t string3[0x800];
-					swprintf_s(string3, L"%s", string);
-					auto h = DSurface::Composite->GetHeight();
-					auto w = DSurface::Composite->GetWidth();
-					RectangleStruct wanted = { 0, 0, 0, 0 };
-
-
-					const wchar_t* d = L"\n";
-					wchar_t* p;
-					p = wcstok(string3, d);
-					while (p)
-					{
-						auto wanted2 = Drawing::GetTextDimensions(p);
-						wanted.Height += wanted2.Height + 2;
-						if (wanted.Width < wanted2.Width)
-							wanted.Width = wanted2.Width;
-						p = wcstok(NULL, d);
-					}
-
-					int exceedX = w - offsetX - wanted.Width;
-					if (exceedX >= 0)
-						exceedX = 0;
-
-					int exceedY = h - offsetY - wanted.Height;
-					if (exceedY >= 0)
-						exceedY = 0;
-
-					RectangleStruct rect = { offsetX + exceedX + 4, offsetY , wanted.Width, wanted.Height };
-					RectangleStruct rectBack = { rect.X - 3, rect.Y - 1, rect.Width + 6, rect.Height + 2 };
-					RectangleStruct rectLine = { rectBack.X - 1, rectBack.Y - 1, rectBack.Width + 2, rectBack.Height + 2 };
-
-					DSurface::Composite->FillRect(&rectLine, color);
-					DSurface::Composite->FillRect(&rectBack, COLOR_BLACK);
-
-					p = wcstok(string2, d);
-					while (p)
-					{
-						auto wanted2 = Drawing::GetTextDimensions(p);
-						DSurface::Composite->DrawTextA(p, rect.X, rect.Y, color);
-						rect.Y += wanted2.Height + 2;
-						p = wcstok(NULL, d);
-					}
-
-					wanted.Height += 2;
-
-					if (opposite)
-						offsetY -= wanted.Height;
-					else
-						offsetY += wanted.Height;
+					opposite = true;
+					offsetY = position.Y - 30;
 				}
-			};
-			
-			auto append = [&displayBuffer](const char* pFormat, ...)
-			{
-				char buffer[0x100];
-				va_list args;
-				va_start(args, pFormat);
-				vsprintf(buffer, pFormat, args);
-				va_end(args);
-				strcat_s(displayBuffer, buffer);
-			};
-			auto display = [&displayBuffer, &DrawText, &offsetX, &offsetY]()
-			{
-				wchar_t bufferW[0x100] = { 0 };
-				mbstowcs(bufferW, displayBuffer, strlen(displayBuffer));
-				DrawText(bufferW, offsetX, offsetY, COLOR_WHITE);
+				if ((position.X < -80 || position.X > DSurface::Composite->GetWidth() + 80)
+					|| (position.Y < -80 || position.Y > DSurface::Composite->GetHeight() + 80))
+					draw = false;
 
-				displayBuffer[0] = 0;
-			};
-			auto displayWide = [&DrawText, &offsetX, &offsetY](const wchar_t* pFormat, ...)
-			{
-				wchar_t buffer[0x100] = { 0 };
-				va_list args;
-				va_start(args, pFormat);
-				vswprintf_s(buffer, 0x100, pFormat, args);
-				va_end(args);
+				char displayBuffer[0x100] = { 0 };
 
-				DrawText(buffer, offsetX, offsetY, COLOR_WHITE);
-			};
-			auto displayToopTip = [&DrawToolTipText, &offsetX, &offsetY, &pTechno](const wchar_t* pFormat, ...)
-			{
-				wchar_t buffer[0x100] = { 0 };
-				va_list args;
-				va_start(args, pFormat);
-				vswprintf_s(buffer, 0x100, pFormat, args);
-				va_end(args);
-
-				auto color = pTechno->Owner->Color;
-				DrawToolTipText(buffer, offsetX, offsetY, RGB8882RGB565(color.R, color.G, color.B));
-				
-			};
-
-
-			auto printFoots = [&append, &display, &displayWide, &displayToopTip, &getMissionName](FootClass* pFoot)
-			{
-				auto pType = pFoot->GetTechnoType();
-
-				for (auto name : ObjectInfoDisplay::GetList())
-				{
-					bool allDisplay = false;
-					if (name == "NONEALL")
-						allDisplay = true;
-
-					if (ObjectInfoDisplay::CanDisplay("uiname", name) || allDisplay)
+				auto DrawText = [&opposite, &draw](const wchar_t* string, int& offsetX, int& offsetY, int color) {
+					if (draw)
 					{
-						char missing[0x100] = { 0 };
-						sprintf(missing, "MISSING:'%s'", pType->UINameLabel);
-						displayToopTip(L"%s", GeneralUtils::LoadStringUnlessMissing(pType->UINameLabel, char2wchar(missing)));
+						auto h = DSurface::Composite->GetHeight();
+						auto w = DSurface::Composite->GetWidth();
+
+						auto wanted = Drawing::GetTextDimensions(string);
+						wanted.Height += 2;
+
+						int exceedX = w - offsetX - wanted.Width;
+						if (exceedX >= 0)
+							exceedX = 0;
+
+						int exceedY = h - offsetY - wanted.Height;
+						if (exceedY >= 0)
+							exceedY = 0;
+
+						RectangleStruct rect = { offsetX + exceedX, offsetY, wanted.Width, wanted.Height };
+
+						DSurface::Composite->FillRect(&rect, COLOR_BLACK);
+						DSurface::Composite->DrawTextA(string, rect.X, rect.Y, color);
+
+						if (opposite)
+							offsetY -= wanted.Height;
+						else
+							offsetY += wanted.Height;
 					}
-					if (ObjectInfoDisplay::CanDisplay("id", name) || allDisplay)
+					};
+				auto DrawToolTipText = [&opposite, &draw](const wchar_t* string, int& offsetX, int& offsetY, int color) {
+					if (draw)
 					{
-						append("ID = %s", pType->ID);
-						display();
-					}
-					if (ObjectInfoDisplay::CanDisplay("uid", name) || allDisplay)
-					{
-						append("UID = %d", (int)pFoot->UniqueID);
-						display();
-					}
-					if (ObjectInfoDisplay::CanDisplay("hp", name) || allDisplay)
-					{
-						append("HP = (%d / %d)", pFoot->Health, pType->Strength);
-						display();
-					}
-					if (ObjectInfoDisplay::CanDisplay("owner", name) || allDisplay)
-					{
-						append("Owner = %s (%s)", pFoot->Owner->get_ID(), pFoot->Owner->PlainName);
-						display();
-					}
-					if (ObjectInfoDisplay::CanDisplay("location", name) || allDisplay)
-					{
-						append("Location = (%d, %d)", (int)pFoot->GetMapCoords().X, (int)pFoot->GetMapCoords().Y);
-						display();
-					}
+						wchar_t string2[0x800];
+						swprintf_s(string2, L"%s", string);
+						wchar_t string3[0x800];
+						swprintf_s(string3, L"%s", string);
+						auto h = DSurface::Composite->GetHeight();
+						auto w = DSurface::Composite->GetWidth();
+						RectangleStruct wanted = { 0, 0, 0, 0 };
 
 
-					if (pFoot->BelongsToATeam())
-					{
-						auto pTeam = pFoot->Team;
-						auto pTeamType = pFoot->Team->Type;
-						if (ObjectInfoDisplay::CanDisplay("aitrigger", name) || allDisplay)
+						const wchar_t* d = L"\n";
+						wchar_t* p;
+						p = wcstok(string3, d);
+						while (p)
 						{
-							bool found = false;
-							for (int i = 0; i < AITriggerTypeClass::Array->Count && !found; i++)
-							{
-								auto pTriggerTeam1Type = AITriggerTypeClass::Array->GetItem(i)->Team1;
-								auto pTriggerTeam2Type = AITriggerTypeClass::Array->GetItem(i)->Team2;
+							auto wanted2 = Drawing::GetTextDimensions(p);
+							wanted.Height += wanted2.Height + 2;
+							if (wanted.Width < wanted2.Width)
+								wanted.Width = wanted2.Width;
+							p = wcstok(NULL, d);
+						}
 
-								if (pTeamType && ((pTriggerTeam1Type && pTriggerTeam1Type == pTeamType) || (pTriggerTeam2Type && pTriggerTeam2Type == pTeamType)))
-								{
-									found = true;
-									auto pTriggerType = AITriggerTypeClass::Array->GetItem(i);
-									append("Trigger ID = %s, weights [Current, Min, Max]: %f, %f, %f", pTriggerType->ID, pTriggerType->Weight_Current, pTriggerType->Weight_Minimum, pTriggerType->Weight_Maximum);
-								}
+						int exceedX = w - offsetX - wanted.Width;
+						if (exceedX >= 0)
+							exceedX = 0;
+
+						int exceedY = h - offsetY - wanted.Height;
+						if (exceedY >= 0)
+							exceedY = 0;
+
+						RectangleStruct rect = { offsetX + exceedX + 4, offsetY , wanted.Width, wanted.Height };
+						RectangleStruct rectBack = { rect.X - 3, rect.Y - 1, rect.Width + 6, rect.Height + 2 };
+						RectangleStruct rectLine = { rectBack.X - 1, rectBack.Y - 1, rectBack.Width + 2, rectBack.Height + 2 };
+
+						DSurface::Composite->FillRect(&rectLine, color);
+						DSurface::Composite->FillRect(&rectBack, COLOR_BLACK);
+
+						p = wcstok(string2, d);
+						while (p)
+						{
+							auto wanted2 = Drawing::GetTextDimensions(p);
+							DSurface::Composite->DrawTextA(p, rect.X, rect.Y, color);
+							rect.Y += wanted2.Height + 2;
+							p = wcstok(NULL, d);
+						}
+
+						wanted.Height += 2;
+
+						if (opposite)
+							offsetY -= wanted.Height;
+						else
+							offsetY += wanted.Height;
+					}
+					};
+
+				auto append = [&displayBuffer](const char* pFormat, ...)
+					{
+						char buffer[0x100];
+						va_list args;
+						va_start(args, pFormat);
+						vsprintf(buffer, pFormat, args);
+						va_end(args);
+						strcat_s(displayBuffer, buffer);
+					};
+				auto display = [&displayBuffer, &DrawText, &offsetX, &offsetY]()
+					{
+						wchar_t bufferW[0x100] = { 0 };
+						mbstowcs(bufferW, displayBuffer, strlen(displayBuffer));
+						DrawText(bufferW, offsetX, offsetY, COLOR_WHITE);
+
+						displayBuffer[0] = 0;
+					};
+				auto displayWide = [&DrawText, &offsetX, &offsetY](const wchar_t* pFormat, ...)
+					{
+						wchar_t buffer[0x100] = { 0 };
+						va_list args;
+						va_start(args, pFormat);
+						vswprintf_s(buffer, 0x100, pFormat, args);
+						va_end(args);
+
+						DrawText(buffer, offsetX, offsetY, COLOR_WHITE);
+					};
+				auto displayToopTip = [&DrawToolTipText, &offsetX, &offsetY, &pTechno](const wchar_t* pFormat, ...)
+					{
+						wchar_t buffer[0x100] = { 0 };
+						va_list args;
+						va_start(args, pFormat);
+						vswprintf_s(buffer, 0x100, pFormat, args);
+						va_end(args);
+
+						auto color = pTechno->Owner->Color;
+						DrawToolTipText(buffer, offsetX, offsetY, RGB8882RGB565(color.R, color.G, color.B));
+
+					};
+
+
+				auto printFoots = [&append, &display, &displayWide, &displayToopTip, &getMissionName](FootClass* pFoot)
+					{
+						auto pType = pFoot->GetTechnoType();
+
+						for (auto name : ObjectInfoDisplay::GetList())
+						{
+							bool allDisplay = false;
+							if (name == "NONEALL")
+								allDisplay = true;
+
+							if (ObjectInfoDisplay::CanDisplay("uiname", name) || allDisplay)
+							{
+								char missing[0x100] = { 0 };
+								sprintf(missing, "MISSING:'%s'", pType->UINameLabel);
+								displayToopTip(L"%s", GeneralUtils::LoadStringUnlessMissing(pType->UINameLabel, char2wchar(missing)));
 							}
-							if (found)
-								display();
-						}
-						if (ObjectInfoDisplay::CanDisplay("team", name) || allDisplay)
-						{
-							append("Team ID = %s, Script ID = %s, Taskforce ID = %s",
-								pTeam->Type->ID, pTeam->CurrentScript->Type->get_ID(), pTeam->Type->TaskForce->ID);
-
-							display();
-						}
-						if (ObjectInfoDisplay::CanDisplay("currentscript", name) || allDisplay)
-						{
-							bool missingUnit = false;
-							for (int i = 0; i < 6; ++i)
+							if (ObjectInfoDisplay::CanDisplay("id", name) || allDisplay)
 							{
-								auto pEntry = pTeam->Type->TaskForce->Entries[i];
-								if (pEntry.Type && pEntry.Amount > 0)
+								append("ID = %s", pType->ID);
+								display();
+							}
+							if (ObjectInfoDisplay::CanDisplay("uid", name) || allDisplay)
+							{
+								append("UID = %d", (int)pFoot->UniqueID);
+								display();
+							}
+							if (ObjectInfoDisplay::CanDisplay("hp", name) || allDisplay)
+							{
+								append("HP = (%d / %d)", pFoot->Health, pType->Strength);
+								display();
+							}
+							if (ObjectInfoDisplay::CanDisplay("owner", name) || allDisplay)
+							{
+								append("Owner = %s (%s)", pFoot->Owner->get_ID(), pFoot->Owner->PlainName);
+								display();
+							}
+							if (ObjectInfoDisplay::CanDisplay("location", name) || allDisplay)
+							{
+								append("Location = (%d, %d)", (int)pFoot->GetMapCoords().X, (int)pFoot->GetMapCoords().Y);
+								display();
+							}
+
+
+							if (pFoot->BelongsToATeam())
+							{
+								auto pTeam = pFoot->Team;
+								auto pTeamType = pFoot->Team->Type;
+								if (ObjectInfoDisplay::CanDisplay("aitrigger", name) || allDisplay)
 								{
-									int missing = pEntry.Amount;
-
-									for (auto pUnit = pTeam->FirstUnit; pUnit; pUnit = pUnit->NextTeamMember)
+									bool found = false;
+									for (int i = 0; i < AITriggerTypeClass::Array->Count && !found; i++)
 									{
-										auto pUnitType = pUnit->GetTechnoType();
+										auto pTriggerTeam1Type = AITriggerTypeClass::Array->GetItem(i)->Team1;
+										auto pTriggerTeam2Type = AITriggerTypeClass::Array->GetItem(i)->Team2;
 
-										if (pUnitType
-											&& pUnit->IsAlive
-											&& pUnit->Health > 0
-											&& !pUnit->InLimbo)
+										if (pTeamType && ((pTriggerTeam1Type && pTriggerTeam1Type == pTeamType) || (pTriggerTeam2Type && pTriggerTeam2Type == pTeamType)))
 										{
-											if (pEntry.Type->ID == pUnitType->ID)
+											found = true;
+											auto pTriggerType = AITriggerTypeClass::Array->GetItem(i);
+											append("Trigger ID = %s, weights [Current, Min, Max]: %f, %f, %f", pTriggerType->ID, pTriggerType->Weight_Current, pTriggerType->Weight_Minimum, pTriggerType->Weight_Maximum);
+										}
+									}
+									if (found)
+										display();
+								}
+								if (ObjectInfoDisplay::CanDisplay("team", name) || allDisplay)
+								{
+									append("Team ID = %s, Script ID = %s, Taskforce ID = %s",
+										pTeam->Type->ID, pTeam->CurrentScript->Type->get_ID(), pTeam->Type->TaskForce->ID);
+
+									display();
+								}
+								if (ObjectInfoDisplay::CanDisplay("currentscript", name) || allDisplay)
+								{
+									bool missingUnit = false;
+									for (int i = 0; i < 6; ++i)
+									{
+										auto pEntry = pTeam->Type->TaskForce->Entries[i];
+										if (pEntry.Type && pEntry.Amount > 0)
+										{
+											int missing = pEntry.Amount;
+
+											for (auto pUnit = pTeam->FirstUnit; pUnit; pUnit = pUnit->NextTeamMember)
 											{
-												missing--;
+												auto pUnitType = pUnit->GetTechnoType();
+
+												if (pUnitType
+													&& pUnit->IsAlive
+													&& pUnit->Health > 0
+													&& !pUnit->InLimbo)
+												{
+													if (pEntry.Type->ID == pUnitType->ID)
+													{
+														missing--;
+													}
+												}
+											}
+
+											if (missing > 0)
+											{
+												missingUnit = true;
 											}
 										}
 									}
-
-									if (missing > 0)
+									if (pTeam->CurrentScript->idxCurrentLine >= 0)
 									{
-										missingUnit = true;
+										ScriptActionNode sNode;
+										pTeam->CurrentScript->GetCurrentAction(&sNode);
+										append("Current Script [Line = Action, Argument]: %d = %d, %d", pTeam->CurrentScript->idxCurrentLine, sNode.Action, sNode.Argument);
+
 									}
-								}
-							}
-							if (pTeam->CurrentScript->idxCurrentLine >= 0)
-							{
-								ScriptActionNode sNode;
-								pTeam->CurrentScript->GetCurrentAction(&sNode);
-								append("Current Script [Line = Action, Argument]: %d = %d, %d", pTeam->CurrentScript->idxCurrentLine, sNode.Action, sNode.Argument);
-
-							}
-							else if (!missingUnit)
-								append("Current Script [Line = Action, Argument]: %d", pTeam->CurrentScript->idxCurrentLine);
-							else
-							{
-								append("Team Missing: ", pTeam->CurrentScript->idxCurrentLine);
-								for (int i = 0; i < 6; ++i)
-								{
-									auto pEntry = pTeam->Type->TaskForce->Entries[i];
-									if (pEntry.Type && pEntry.Amount > 0)
+									else if (!missingUnit)
+										append("Current Script [Line = Action, Argument]: %d", pTeam->CurrentScript->idxCurrentLine);
+									else
 									{
-										int missing = pEntry.Amount;
-
-										for (auto pUnit = pTeam->FirstUnit; pUnit; pUnit = pUnit->NextTeamMember)
+										append("Team Missing: ", pTeam->CurrentScript->idxCurrentLine);
+										for (int i = 0; i < 6; ++i)
 										{
-											auto pUnitType = pUnit->GetTechnoType();
-
-											if (pUnitType
-												&& pUnit->IsAlive
-												&& pUnit->Health > 0
-												&& !pUnit->InLimbo)
+											auto pEntry = pTeam->Type->TaskForce->Entries[i];
+											if (pEntry.Type && pEntry.Amount > 0)
 											{
-												if (pEntry.Type->ID == pUnitType->ID)
+												int missing = pEntry.Amount;
+
+												for (auto pUnit = pTeam->FirstUnit; pUnit; pUnit = pUnit->NextTeamMember)
 												{
-													missing--;
+													auto pUnitType = pUnit->GetTechnoType();
+
+													if (pUnitType
+														&& pUnit->IsAlive
+														&& pUnit->Health > 0
+														&& !pUnit->InLimbo)
+													{
+														if (pEntry.Type->ID == pUnitType->ID)
+														{
+															missing--;
+														}
+													}
+												}
+
+												if (missing > 0)
+												{
+													append("(%d, %s) ", missing, pEntry.Type->ID);
 												}
 											}
 										}
+									}
+									display();
+								}
+							}
+							if (ObjectInfoDisplay::CanDisplay("passenger", name) || allDisplay)
+							{
+								if (pFoot->Passengers.NumPassengers > 0)
+								{
+									FootClass* pCurrent = pFoot->Passengers.FirstPassenger;
+									append("%d Passengers: %s", pFoot->Passengers.NumPassengers, pCurrent->GetTechnoType()->ID);
+									for (pCurrent = abstract_cast<FootClass*>(pCurrent->NextObject); pCurrent; pCurrent = abstract_cast<FootClass*>(pCurrent->NextObject))
+										append(", %s", pCurrent->GetTechnoType()->ID);
+									display();
+								}
+							}
+							if (ObjectInfoDisplay::CanDisplay("target", name) || allDisplay)
+							{
+								if (pFoot->Target)
+								{
+									auto mapCoords = CellStruct::Empty;
+									auto ID = "N/A";
 
-										if (missing > 0)
+									if (auto const pObject = abstract_cast<ObjectClass*>(pFoot->Target))
+									{
+										mapCoords = pObject->GetMapCoords();
+										ID = pObject->GetType()->get_ID();
+									}
+									else if (auto const pCell = abstract_cast<CellClass*>(pFoot->Target))
+									{
+										mapCoords = pCell->MapCoords;
+										ID = "Cell";
+									}
+
+									append("Target = %s, Distance = %d, Location = (%d, %d)", ID, (pFoot->DistanceFrom(pFoot->Target) / 256), mapCoords.X, mapCoords.Y);
+									display();
+								}
+							}
+							if (ObjectInfoDisplay::CanDisplay("destination", name) || allDisplay)
+							{
+								auto pDestination = abstract_cast<TechnoClass*>(pFoot->Destination);
+
+								if (pDestination)
+								{
+									append("Destination = %s, Distance = %d, Location = (%d, %d)", pDestination->GetTechnoType()->ID, (pDestination->DistanceFrom(pFoot) / 256), pDestination->GetMapCoords().X, pDestination->GetMapCoords().Y);
+									display();
+								}
+								else
+								{
+									if (pFoot->Destination)
+									{
+										auto destCell = CellClass::Coord2Cell(pFoot->Destination->GetCoords());
+										append("Destination = (%d, %d)", destCell.X, destCell.Y);
+										display();
+									}
+								}
+							}
+							if (ObjectInfoDisplay::CanDisplay("focus", name) || allDisplay)
+							{
+								auto pFocus = abstract_cast<TechnoClass*>(pFoot->Focus);
+
+								if (pFocus)
+								{
+									append("Focus = %s, Distance = %d, Location = (%d, %d)", pFocus->GetTechnoType()->ID, (pFocus->DistanceFrom(pFoot) / 256), pFocus->GetMapCoords().X, pFocus->GetMapCoords().Y);
+									display();
+								}
+							}
+
+							if (ObjectInfoDisplay::CanDisplay("ammo", name) || allDisplay)
+							{
+								if (pType->Ammo > 0)
+								{
+									append("Ammo = (%d / %d)", pFoot->Ammo, pType->Ammo);
+									display();
+								}
+							}
+							if (ObjectInfoDisplay::CanDisplay("currentmission", name) || allDisplay)
+							{
+								append("Current Mission = %d (%s)", pFoot->CurrentMission, getMissionName((int)pFoot->CurrentMission));
+								display();
+							}
+							if (ObjectInfoDisplay::CanDisplay("megamission", name) || allDisplay)
+							{
+								if (pFoot->unknown_int_5C4 > -1)
+								{
+									append("Mega Mission = %d (%s)", pFoot->unknown_int_5C4, getMissionName((int)pFoot->unknown_int_5C4));
+									display();
+								}
+
+							}
+							if (ObjectInfoDisplay::CanDisplay("megatarget", name) || allDisplay)
+							{
+								auto megaTarget = (AbstractClass*)pFoot->unknown_5CC;
+								if (megaTarget)
+								{
+									auto mapCoords = CellStruct::Empty;
+									auto ID = "N/A";
+
+									if (auto const pObject = abstract_cast<ObjectClass*>(megaTarget))
+									{
+										mapCoords = pObject->GetMapCoords();
+										ID = pObject->GetType()->get_ID();
+									}
+									else if (auto const pCell = abstract_cast<CellClass*>(megaTarget))
+									{
+										mapCoords = pCell->MapCoords;
+										ID = "Cell";
+									}
+
+									append("Mega Target = %s, Distance = %d, Location = (%d, %d)", ID, (pFoot->DistanceFrom(megaTarget) / 256), mapCoords.X, mapCoords.Y);
+									display();
+								}
+							}
+							if (ObjectInfoDisplay::CanDisplay("megadestination", name) || allDisplay)
+							{
+								auto megaDestination = (AbstractClass*)pFoot->unknown_5C8;
+								auto pDestination = abstract_cast<TechnoClass*>(megaDestination);
+								if (pDestination)
+								{
+									append("Destination = %s, Distance = %d, Location = (%d, %d)", pDestination->GetTechnoType()->ID, (pDestination->DistanceFrom(pFoot) / 256), pDestination->GetMapCoords().X, pDestination->GetMapCoords().Y);
+									display();
+								}
+								else
+								{
+									if (megaDestination)
+									{
+										auto destCell = CellClass::Coord2Cell(megaDestination->GetCoords());
+										append("Mega Destination = (%d, %d)", destCell.X, destCell.Y);
+										display();
+									}
+								}
+							}
+
+							if (ObjectInfoDisplay::CanDisplay("group", name) || allDisplay)
+							{
+								append("Group = %d", pFoot->Group);
+								display();
+							}
+							if (ObjectInfoDisplay::CanDisplay("recruit", name) || allDisplay)
+							{
+								append("RecruitA = %d, RecruitB = %d", (int)pFoot->RecruitableA, (int)pFoot->RecruitableB);
+								display();
+							}
+							if (ObjectInfoDisplay::CanDisplay("veterancy", name) || allDisplay)
+							{
+								if (pType->Trainable)
+								{
+									char veterancy[10] = { 0 };
+									if (pFoot->Veterancy.IsRookie())
+										sprintf(veterancy, "%s", "Rookie");
+									else if (pFoot->Veterancy.IsVeteran())
+										sprintf(veterancy, "%s", "Veteran");
+									else if (pFoot->Veterancy.IsElite())
+										sprintf(veterancy, "%s", "Elite");
+									else
+										sprintf(veterancy, "%s", "N/A");
+									append("Veterancy = %s (%.2f)", veterancy, pFoot->Veterancy.Veterancy);
+									display();
+								}
+							}
+							if (ObjectInfoDisplay::CanDisplay("tag", name) || allDisplay)
+							{
+								if (pFoot->AttachedTag)
+								{
+									append("Tag = %s, InstanceCount = %d", pFoot->AttachedTag->Type->get_ID(), pFoot->AttachedTag->InstanceCount);
+									display();
+									if (pFoot->AttachedTag->FirstTrigger)
+									{
+										auto pTrigger = pFoot->AttachedTag->FirstTrigger;
+
+										auto displayTrigger = [append, display](auto self, TriggerClass* trigger, int counter) -> void {
+											if (trigger) {
+												append("Trigger %d = %s", counter, trigger->Type->get_ID());
+												display();
+												self(self, trigger->NextTrigger, counter + 1);
+											}
+											};
+										displayTrigger(displayTrigger, pTrigger, 0);
+									}
+								}
+							}
+						}
+					};
+				auto printBuilding = [&append, &display, &displayWide, &displayToopTip, &getMissionName](BuildingClass* pBuilding)
+					{
+						auto pType = pBuilding->GetTechnoType();
+
+
+						for (auto name : ObjectInfoDisplay::GetList())
+						{
+							bool allDisplay = false;
+							if (name == "NONEALL")
+								allDisplay = true;
+
+							if (ObjectInfoDisplay::CanDisplay("uiname", name) || allDisplay)
+							{
+								char missing[0x100] = { 0 };
+								sprintf(missing, "MISSING:'%s'", pType->UINameLabel);
+								displayToopTip(L"%s", GeneralUtils::LoadStringUnlessMissing(pType->UINameLabel, char2wchar(missing)));
+							}
+							if (ObjectInfoDisplay::CanDisplay("id", name) || allDisplay)
+							{
+								append("ID = %s", pType->ID);
+								display();
+							}
+							if (ObjectInfoDisplay::CanDisplay("uid", name) || allDisplay)
+							{
+								append("UID = %d", (int)pBuilding->UniqueID);
+								display();
+							}
+							if (ObjectInfoDisplay::CanDisplay("hp", name) || allDisplay)
+							{
+								append("HP = (%d / %d)", pBuilding->Health, pBuilding->Type->Strength);
+								display();
+							}
+							if (ObjectInfoDisplay::CanDisplay("owner", name) || allDisplay)
+							{
+								append("Owner = %s (%s)", pBuilding->Owner->get_ID(), pBuilding->Owner->PlainName);
+								display();
+							}
+							if (ObjectInfoDisplay::CanDisplay("location", name) || allDisplay)
+							{
+								append("Location = (%d, %d)", pBuilding->GetMapCoords().X, pBuilding->GetMapCoords().Y);
+								display();
+							}
+							if (ObjectInfoDisplay::CanDisplay("power", name) || allDisplay)
+							{
+
+								if (auto const pBldType = abstract_cast<BuildingTypeClass*>(pType))
+								{
+									int power = pBldType->PowerBonus - pBldType->PowerDrain;
+									if (power > 0)
+									{
+										power *= ((double)pBuilding->Health / (double)pBuilding->Type->Strength);
+									}
+									append("Power: %d", power);
+									append(", Total Power Output: %d, Total Power Drain: %d", pBuilding->Owner->PowerOutput, pBuilding->Owner->PowerDrain);
+									display();
+								}
+							}
+							if (ObjectInfoDisplay::CanDisplay("factory", name) || allDisplay)
+							{
+								if (pBuilding->Factory && pBuilding->Factory->Object)
+								{
+									append("Production: %s (%d%%)", pBuilding->Factory->Object->GetTechnoType()->ID, (pBuilding->Factory->GetProgress() * 100 / 54));
+									display();
+								}
+							}
+							if (ObjectInfoDisplay::CanDisplay("money", name) || allDisplay)
+							{
+								//if (pBuilding->Type->Refinery || pBuilding->Type->ResourceGatherer)
+								{
+									append("Money: %d", pBuilding->Owner->Available_Money());
+									display();
+								}
+							}
+							if (ObjectInfoDisplay::CanDisplay("occupants", name) || allDisplay)
+							{
+								if (pBuilding->Occupants.Count > 0)
+								{
+									append("%d Occupants: %s", pBuilding->Occupants.Count, pBuilding->Occupants.GetItem(0)->Type->ID);
+									for (int i = 1; i < pBuilding->Occupants.Count; i++)
+									{
+										append(", %s", pBuilding->Occupants.GetItem(i)->Type->ID);
+									}
+									display();
+								}
+							}
+							if (ObjectInfoDisplay::CanDisplay("enemy", name) || allDisplay)
+							{
+								HouseClass* pEnemyHouse = nullptr;
+
+								if (auto pHouse = pBuilding->Owner)
+								{
+									int angerLevel = -1;
+									if (pHouse->EnemyHouseIndex >= 0)
+									{
+										pEnemyHouse = HouseClass::Array->GetItem(pHouse->EnemyHouseIndex);
+										for (auto pNode : pHouse->AngerNodes)
 										{
-											append("(%d, %s) ", missing, pEntry.Type->ID);
+											if (pNode.House == pEnemyHouse)
+											{
+												angerLevel = pNode.AngerLevel;
+											}
 										}
 									}
-								}
-							}
-							display();
-						}
-					}
-					if (ObjectInfoDisplay::CanDisplay("passenger", name) || allDisplay)
-					{
-						if (pFoot->Passengers.NumPassengers > 0)
-						{
-							FootClass* pCurrent = pFoot->Passengers.FirstPassenger;
-							append("%d Passengers: %s", pFoot->Passengers.NumPassengers, pCurrent->GetTechnoType()->ID);
-							for (pCurrent = abstract_cast<FootClass*>(pCurrent->NextObject); pCurrent; pCurrent = abstract_cast<FootClass*>(pCurrent->NextObject))
-								append(", %s", pCurrent->GetTechnoType()->ID);
-							display();
-						}
-					}
-					if (ObjectInfoDisplay::CanDisplay("target", name) || allDisplay)
-					{
-						if (pFoot->Target)
-						{
-							auto mapCoords = CellStruct::Empty;
-							auto ID = "N/A";
-
-							if (auto const pObject = abstract_cast<ObjectClass*>(pFoot->Target))
-							{
-								mapCoords = pObject->GetMapCoords();
-								ID = pObject->GetType()->get_ID();
-							}
-							else if (auto const pCell = abstract_cast<CellClass*>(pFoot->Target))
-							{
-								mapCoords = pCell->MapCoords;
-								ID = "Cell";
-							}
-
-							append("Target = %s, Distance = %d, Location = (%d, %d)", ID, (pFoot->DistanceFrom(pFoot->Target) / 256), mapCoords.X, mapCoords.Y);
-							display();
-						}
-					}
-					if (ObjectInfoDisplay::CanDisplay("destination", name) || allDisplay)
-					{
-						auto pDestination = abstract_cast<TechnoClass*>(pFoot->Destination);
-
-						if (pDestination)
-						{
-							append("Destination = %s, Distance = %d, Location = (%d, %d)", pDestination->GetTechnoType()->ID, (pDestination->DistanceFrom(pFoot) / 256), pDestination->GetMapCoords().X, pDestination->GetMapCoords().Y);
-							display();
-						}
-						else
-						{
-							if (pFoot->Destination)
-							{
-								auto destCell = CellClass::Coord2Cell(pFoot->Destination->GetCoords());
-								append("Destination = (%d, %d)", destCell.X, destCell.Y);
-								display();
-							}
-						}
-					}
-					if (ObjectInfoDisplay::CanDisplay("focus", name) || allDisplay)
-					{
-						auto pFocus = abstract_cast<TechnoClass*>(pFoot->Focus);
-
-						if (pFocus)
-						{
-							append("Focus = %s, Distance = %d, Location = (%d, %d)", pFocus->GetTechnoType()->ID, (pFocus->DistanceFrom(pFoot) / 256), pFocus->GetMapCoords().X, pFocus->GetMapCoords().Y);
-							display();
-						}
-					}
-
-					if (ObjectInfoDisplay::CanDisplay("ammo", name) || allDisplay)
-					{
-						if (pType->Ammo > 0)
-						{
-							append("Ammo = (%d / %d)", pFoot->Ammo, pType->Ammo);
-							display();
-						}
-					}
-					if (ObjectInfoDisplay::CanDisplay("currentmission", name) || allDisplay)
-					{
-						append("Current Mission = %d (%s)", pFoot->CurrentMission, getMissionName((int)pFoot->CurrentMission));
-						display();
-					}
-					if (ObjectInfoDisplay::CanDisplay("megamission", name) || allDisplay)
-					{
-						if (pFoot->unknown_int_5C4 > -1)
-						{
-							append("Mega Mission = %d (%s)", pFoot->unknown_int_5C4, getMissionName((int)pFoot->unknown_int_5C4));
-							display();
-						}
-
-					}
-					if (ObjectInfoDisplay::CanDisplay("megatarget", name) || allDisplay)
-					{
-						auto megaTarget = (AbstractClass*)pFoot->unknown_5CC;
-						if (megaTarget)
-						{
-							auto mapCoords = CellStruct::Empty;
-							auto ID = "N/A";
-
-							if (auto const pObject = abstract_cast<ObjectClass*>(megaTarget))
-							{
-								mapCoords = pObject->GetMapCoords();
-								ID = pObject->GetType()->get_ID();
-							}
-							else if (auto const pCell = abstract_cast<CellClass*>(megaTarget))
-							{
-								mapCoords = pCell->MapCoords;
-								ID = "Cell";
-							}
-
-							append("Mega Target = %s, Distance = %d, Location = (%d, %d)", ID, (pFoot->DistanceFrom(megaTarget) / 256), mapCoords.X, mapCoords.Y);
-							display();
-						}
-					}
-					if (ObjectInfoDisplay::CanDisplay("megadestination", name) || allDisplay)
-					{
-						auto megaDestination = (AbstractClass*)pFoot->unknown_5C8;
-						auto pDestination = abstract_cast<TechnoClass*>(megaDestination);
-						if (pDestination)
-						{
-							append("Destination = %s, Distance = %d, Location = (%d, %d)", pDestination->GetTechnoType()->ID, (pDestination->DistanceFrom(pFoot) / 256), pDestination->GetMapCoords().X, pDestination->GetMapCoords().Y);
-							display();
-						}
-						else
-						{
-							if (megaDestination)
-							{
-								auto destCell = CellClass::Coord2Cell(megaDestination->GetCoords());
-								append("Mega Destination = (%d, %d)", destCell.X, destCell.Y);
-								display();
-							}
-						}
-					}
-
-					if (ObjectInfoDisplay::CanDisplay("group", name) || allDisplay)
-					{
-						append("Group = %d", pFoot->Group);
-						display();
-					}
-					if (ObjectInfoDisplay::CanDisplay("recruit", name) || allDisplay)
-					{
-						append("RecruitA = %d, RecruitB = %d", (int)pFoot->RecruitableA, (int)pFoot->RecruitableB);
-						display();
-					}
-					if (ObjectInfoDisplay::CanDisplay("veterancy", name) || allDisplay)
-					{
-						if (pType->Trainable)
-						{
-							char veterancy[10] = { 0 };
-							if (pFoot->Veterancy.IsRookie())
-								sprintf(veterancy, "%s", "Rookie");
-							else if (pFoot->Veterancy.IsVeteran())
-								sprintf(veterancy, "%s", "Veteran");
-							else if (pFoot->Veterancy.IsElite())
-								sprintf(veterancy, "%s", "Elite");
-							else
-								sprintf(veterancy, "%s", "N/A");
-							append("Veterancy = %s (%.2f)", veterancy, pFoot->Veterancy.Veterancy);
-							display();
-						}
-					}
-					if (ObjectInfoDisplay::CanDisplay("tag", name) || allDisplay)
-					{
-						if (pFoot->AttachedTag)
-						{
-							append("Tag = %s, InstanceCount = %d", pFoot->AttachedTag->Type->get_ID(), pFoot->AttachedTag->InstanceCount);
-							display();	
-							if (pFoot->AttachedTag->FirstTrigger)
-							{
-								auto pTrigger = pFoot->AttachedTag->FirstTrigger;
-
-								auto displayTrigger = [append, display](auto self, TriggerClass* trigger, int counter) -> void {
-									if (trigger) {
-										append("Trigger %d = %s", counter, trigger->Type->get_ID());
-										display();
-										self(self, trigger->NextTrigger,  counter + 1);
+									else
+									{
+										for (auto pNode : pHouse->AngerNodes)
+										{
+											if (!pNode.House->Type->MultiplayPassive
+												&& !pNode.House->Defeated
+												&& !pNode.House->IsObserver()
+												&& !pNode.House->IsAlliedWith(pHouse)
+												&& ((pNode.AngerLevel > angerLevel
+													)
+													|| angerLevel < 0))
+											{
+												angerLevel = pNode.AngerLevel;
+												pEnemyHouse = pNode.House;
+											}
+										}
 									}
-									};
-								displayTrigger(displayTrigger, pTrigger, 0);				
-							}
-						}
-					}
-				}
-			};
-			auto printBuilding = [&append, &display, &displayWide,&displayToopTip, &getMissionName](BuildingClass* pBuilding)
-			{
-				auto pType = pBuilding->GetTechnoType();
 
-
-				for (auto name : ObjectInfoDisplay::GetList())
-				{
-					bool allDisplay = false;
-					if (name == "NONEALL")
-						allDisplay = true;
-
-					if (ObjectInfoDisplay::CanDisplay("uiname", name)|| allDisplay)
-					{
-						char missing[0x100] = { 0 };
-						sprintf(missing, "MISSING:'%s'", pType->UINameLabel);
-						displayToopTip(L"%s", GeneralUtils::LoadStringUnlessMissing(pType->UINameLabel, char2wchar(missing)));
-					}
-					if (ObjectInfoDisplay::CanDisplay("id", name) || allDisplay)
-					{
-						append("ID = %s", pType->ID);
-						display();
-					}
-					if (ObjectInfoDisplay::CanDisplay("uid", name) || allDisplay)
-					{
-						append("UID = %d", (int)pBuilding->UniqueID);
-						display();
-					}
-					if (ObjectInfoDisplay::CanDisplay("hp", name) || allDisplay)
-					{
-						append("HP = (%d / %d)", pBuilding->Health, pBuilding->Type->Strength);
-						display();
-					}
-					if (ObjectInfoDisplay::CanDisplay("owner", name) || allDisplay)
-					{
-						append("Owner = %s (%s)", pBuilding->Owner->get_ID(), pBuilding->Owner->PlainName);
-						display();
-					}
-					if (ObjectInfoDisplay::CanDisplay("location", name) || allDisplay)
-					{
-						append("Location = (%d, %d)", pBuilding->GetMapCoords().X, pBuilding->GetMapCoords().Y);
-						display();
-					}
-					if (ObjectInfoDisplay::CanDisplay("power", name) || allDisplay)
-					{
-
-						if (auto const pBldType = abstract_cast<BuildingTypeClass*>(pType))
-						{
-							int power = pBldType->PowerBonus - pBldType->PowerDrain;
-							if (power > 0)
-							{
-								power *= ((double)pBuilding->Health / (double)pBuilding->Type->Strength);
-							}
-								append("Power: %d", power);
-								int totalPowerBonus = 0;
-								int totalPowerDrain = 0;
-								append(", Total Power Output: %d, Total Power Drain: %d", pBuilding->Owner->PowerOutput, pBuilding->Owner->PowerDrain);
-								display();
-						}
-					}
-					if (ObjectInfoDisplay::CanDisplay("factory", name) || allDisplay)
-					{
-						if (pBuilding->Factory && pBuilding->Factory->Object)
-						{
-							append("Production: %s (%d%%)", pBuilding->Factory->Object->GetTechnoType()->ID, (pBuilding->Factory->GetProgress() * 100 / 54));
-							display();
-						}
-					}
-					if (ObjectInfoDisplay::CanDisplay("money", name) || allDisplay)
-					{
-						//if (pBuilding->Type->Refinery || pBuilding->Type->ResourceGatherer)
-						{
-							append("Money: %d", pBuilding->Owner->Available_Money());
-							display();
-						}
-					}
-					if (ObjectInfoDisplay::CanDisplay("occupants", name) || allDisplay)
-					{
-						if (pBuilding->Occupants.Count > 0)
-						{
-							append("%d Occupants: %s", pBuilding->Occupants.Count, pBuilding->Occupants.GetItem(0)->Type->ID);
-							for (int i = 1; i < pBuilding->Occupants.Count; i++)
-							{
-								append(", %s", pBuilding->Occupants.GetItem(i)->Type->ID);
-							}
-							display();
-						}
-					}
-					if (ObjectInfoDisplay::CanDisplay("enemy", name) || allDisplay)
-					{
-						HouseClass* pEnemyHouse = nullptr;
-
-						if (auto pHouse = pBuilding->Owner)
-						{
-							int angerLevel = -1;
-							bool isHumanHouse = false;
-
-							for (auto pNode : pHouse->AngerNodes)
-							{
-								if (!pNode.House->Type->MultiplayPassive
-									&& !pNode.House->Defeated
-									&& !pNode.House->IsObserver()
-									&& !pNode.House->IsAlliedWith(pHouse)
-									&& ((pNode.AngerLevel > angerLevel
-										)
-										|| angerLevel < 0))
-								{
-									angerLevel = pNode.AngerLevel;
-									pEnemyHouse = pNode.House;
+									if (pEnemyHouse)
+									{
+										append("Enemy = %s (%s),  AngerLevel = %d", pEnemyHouse->get_ID(), pEnemyHouse->PlainName, angerLevel);
+										display();
+									}
 								}
 							}
-
-							if (pEnemyHouse)
+							if (ObjectInfoDisplay::CanDisplay("upgrades", name) || allDisplay)
 							{
-								append("Enemy = %s (%s),  AngerLevel = %d", pEnemyHouse->get_ID(), pEnemyHouse->PlainName, angerLevel);
+								if (pBuilding->Type->Upgrades)
+								{
+									append("Upgrades (%d / %d): ", pBuilding->UpgradeLevel, pBuilding->Type->Upgrades);
+									for (int i = 0; i < 3; i++)
+									{
+										if (i != 0)
+											append(", ");
+
+										append("Slot %d = %s", i + 1, pBuilding->Upgrades[i] ? pBuilding->Upgrades[i]->get_ID() : "<none>");
+									}
+									display();
+								}
+							}
+							if (ObjectInfoDisplay::CanDisplay("target", name) || allDisplay)
+							{
+								if (pBuilding->Target)
+								{
+									auto mapCoords = CellStruct::Empty;
+									auto ID = "N/A";
+
+									if (auto const pObject = abstract_cast<ObjectClass*>(pBuilding->Target))
+									{
+										mapCoords = pObject->GetMapCoords();
+										ID = pObject->GetType()->get_ID();
+									}
+									else if (auto const pCell = abstract_cast<CellClass*>(pBuilding->Target))
+									{
+										mapCoords = pCell->MapCoords;
+										ID = "Cell";
+									}
+
+									append("Target = %s, Distance = %d, Location = (%d, %d)", ID, (pBuilding->DistanceFrom(pBuilding->Target) / 256), mapCoords.X, mapCoords.Y);
+									display();
+								}
+							}
+							if (ObjectInfoDisplay::CanDisplay("ammo", name) || allDisplay)
+							{
+								if (pBuilding->Type->Ammo > 0)
+								{
+									append("Ammo = (%d / %d)", pBuilding->Ammo, pBuilding->Type->Ammo);
+									display();
+								}
+							}
+							if (ObjectInfoDisplay::CanDisplay("currentmission", name) || allDisplay)
+							{
+								append("Current Mission = %d (%s)", pBuilding->CurrentMission, getMissionName((int)pBuilding->CurrentMission));
 								display();
 							}
-						}
-					}
-					if (ObjectInfoDisplay::CanDisplay("upgrades", name) || allDisplay)
-					{
-						if (pBuilding->Type->Upgrades)
-						{
-							append("Upgrades (%d / %d): ", pBuilding->UpgradeLevel, pBuilding->Type->Upgrades);
-							for (int i = 0; i < 3; i++)
+							if (ObjectInfoDisplay::CanDisplay("group", name) || allDisplay)
 							{
-								if (i != 0)
-									append(", ");
-
-								append("Slot %d = %s", i + 1, pBuilding->Upgrades[i] ? pBuilding->Upgrades[i]->get_ID() : "<none>");
+								append("Group = %d", pBuilding->Group);
+								display();
 							}
-							display();
-						}
-					}
-					if (ObjectInfoDisplay::CanDisplay("target", name) || allDisplay)
-					{
-						if (pBuilding->Target)
-						{
-							auto mapCoords = CellStruct::Empty;
-							auto ID = "N/A";
-
-							if (auto const pObject = abstract_cast<ObjectClass*>(pBuilding->Target))
+							if (ObjectInfoDisplay::CanDisplay("veterancy", name) || allDisplay)
 							{
-								mapCoords = pObject->GetMapCoords();
-								ID = pObject->GetType()->get_ID();
+								if (pType->Trainable)
+								{
+									char veterancy[10] = { 0 };
+									if (pBuilding->Veterancy.IsRookie())
+										sprintf(veterancy, "%s", "Rookie");
+									else if (pBuilding->Veterancy.IsVeteran())
+										sprintf(veterancy, "%s", "Veteran");
+									else if (pBuilding->Veterancy.IsElite())
+										sprintf(veterancy, "%s", "Elite");
+									else
+										sprintf(veterancy, "%s", "N/A");
+									append("Veterancy = %s (%.2f)", veterancy, pBuilding->Veterancy.Veterancy);
+									display();
+								}
 							}
-							else if (auto const pCell = abstract_cast<CellClass*>(pBuilding->Target))
+							if (ObjectInfoDisplay::CanDisplay("tag", name) || allDisplay)
 							{
-								mapCoords = pCell->MapCoords;
-								ID = "Cell";
+								if (pBuilding->AttachedTag)
+								{
+									append("Tag = (%s), InstanceCount = (%d)", pBuilding->AttachedTag->Type->get_ID(), pBuilding->AttachedTag->InstanceCount);
+									display();
+								}
 							}
-
-							append("Target = %s, Distance = %d, Location = (%d, %d)", ID, (pBuilding->DistanceFrom(pBuilding->Target) / 256), mapCoords.X, mapCoords.Y);
-							display();
 						}
-					}
-					if (ObjectInfoDisplay::CanDisplay("ammo", name) || allDisplay)
-					{
-						if (pBuilding->Type->Ammo > 0)
-						{
-							append("Ammo = (%d / %d)", pBuilding->Ammo, pBuilding->Type->Ammo);
-							display();
-						}
-					}
-					if (ObjectInfoDisplay::CanDisplay("currentmission", name) || allDisplay)
-					{
-						append("Current Mission = %d (%s)", pBuilding->CurrentMission, getMissionName((int)pBuilding->CurrentMission));
-						display();
-					}
-					if (ObjectInfoDisplay::CanDisplay("group", name) || allDisplay)
-					{
-						append("Group = %d", pBuilding->Group);
-						display();
-					}
-					if (ObjectInfoDisplay::CanDisplay("veterancy", name) || allDisplay)
-					{
-						if (pType->Trainable)
-						{
-							char veterancy[10] = { 0 };
-							if (pBuilding->Veterancy.IsRookie())
-								sprintf(veterancy, "%s", "Rookie");
-							else if (pBuilding->Veterancy.IsVeteran())
-								sprintf(veterancy, "%s", "Veteran");
-							else if (pBuilding->Veterancy.IsElite())
-								sprintf(veterancy, "%s", "Elite");
-							else
-								sprintf(veterancy, "%s", "N/A");
-							append("Veterancy = %s (%.2f)", veterancy, pBuilding->Veterancy.Veterancy);
-							display();
-						}
-					}
-					if (ObjectInfoDisplay::CanDisplay("tag", name) || allDisplay)
-					{
-						if (pBuilding->AttachedTag)
-						{
-							append("Tag = (%s), InstanceCount = (%d)", pBuilding->AttachedTag->Type->get_ID(), pBuilding->AttachedTag->InstanceCount);
-							display();
-						}
-					}
-				}
 
 
-				
-			};
+
+					};
 
 
-			switch (pTechno->WhatAmI())
-			{
+				switch (pTechno->WhatAmI())
+				{
 				case AbstractType::Infantry:
 				case AbstractType::Unit:
 				case AbstractType::Aircraft:
-					printFoots(abstract_cast<FootClass*>(pTechno));
+					printFoots(static_cast<FootClass*>(pTechno));
 					break;
 				case AbstractType::Building:
-					printBuilding(abstract_cast<BuildingClass*>(pTechno));
+					printBuilding(static_cast<BuildingClass*>(pTechno));
 					break;
 				default:
 					append("INVALID ITEM!");
 					display();
 					break;
+				}
 			}
-
-
 		}
 	}
 
-	
+	if (bTriggerDebug)
+	{
+		auto DrawText = [](const wchar_t* string, int& offsetX, int& offsetY, int color, int index, int bkgColor) {
+
+			auto h = DSurface::Composite->GetHeight();
+			auto w = DSurface::Composite->GetWidth();
+
+
+			auto wanted = Drawing::GetTextDimensions(string);
+			wanted.Height += 2;
+
+			if (wanted.Height + offsetY >= h - 100)
+				return false;
+
+			RectangleStruct rect = { offsetX , offsetY, wanted.Width, wanted.Height };
+			TriggerDebugRect[index] = rect;
+
+			DSurface::Composite->FillRect(&rect, bkgColor);
+			DSurface::Composite->DrawTextA(string, rect.X, rect.Y, color);
+
+			offsetY += wanted.Height;
+			return true;
+			};
+		int DisplayX = TriggerDebugStartX;
+		int DisplayY = TriggerDebugStartY;
+		for (int i = 0; i < RECT_COUNT; ++i)
+		{
+			TriggerDebugRect[i] = { 0,0,0,0 };
+		}
+		bTriggerDebugPageEnd = true;
+		for (int i = CurrentPage * PageTriggerCount; i < std::min(TriggerClass::Array->Count, (CurrentPage + 1) * PageTriggerCount); i++) {
+			auto trigger = TriggerClass::Array->GetItem(i);
+			if (!DrawText(char2wchar(Format("%s (%s)", trigger->Type->get_ID(), trigger->Type->Name)),
+				DisplayX, DisplayY, COLOR_WHITE, i - CurrentPage * PageTriggerCount, trigger->Enabled ? RGB8882RGB565(0,120,0) : COLOR_BLACK))
+			{
+				if (PageTriggerCount == RECT_COUNT)
+					PageTriggerCount = i - CurrentPage * PageTriggerCount;
+				bTriggerDebugPageEnd = false;
+				break;
+			}
+			if (i == (CurrentPage + 1) * PageTriggerCount - 1 && i != TriggerClass::Array->Count)
+				bTriggerDebugPageEnd = false;
+		}
+
+
+		const wchar_t* pageUp = L"Page Up";
+		const wchar_t* pageDown = L"Page Down";
+		int upRight = 0;
+		{
+			auto wanted = Drawing::GetTextDimensions(pageUp);
+			wanted.Height += 2;
+
+			RectangleStruct rect = { TriggerDebugStartX , TriggerDebugStartY - wanted.Height, wanted.Width, wanted.Height };
+			TriggerDebugPageUp = rect;
+			upRight = TriggerDebugStartX + wanted.Width;
+
+			DSurface::Composite->FillRect(&rect, COLOR_BLACK);
+			DSurface::Composite->DrawTextA(pageUp, rect.X, rect.Y, COLOR_WHITE);
+		}
+		{
+			auto wanted = Drawing::GetTextDimensions(pageDown);
+			wanted.Height += 2;
+
+			RectangleStruct rect = { upRight + 10 , TriggerDebugStartY - wanted.Height, wanted.Width, wanted.Height };
+			TriggerDebugPageDown = rect;
+
+			DSurface::Composite->FillRect(&rect, COLOR_BLACK);
+			DSurface::Composite->DrawTextA(pageDown, rect.X, rect.Y, COLOR_WHITE);
+		}
+
+		const wchar_t* Modes[Count] =
+		{
+			L"Run", L"Enable", L"Disable", L"Destroy"
+		};
+		int modesRight[Count]{ 0 };
+		for (int i = 0; i < Count; ++i)
+		{
+			auto wanted = Drawing::GetTextDimensions(Modes[i]);
+			wanted.Height += 2;
+
+			RectangleStruct rect = { TriggerDebugStartX , TriggerDebugPageDown.Y - wanted.Height, wanted.Width, wanted.Height };
+			if (i > 0)
+			{
+				rect.X = modesRight[i - 1] + 10;
+			}
+			TriggerDebugMode[i] = rect;
+			modesRight[i] = rect.X + wanted.Width;
+
+			DSurface::Composite->FillRect(&rect, COLOR_BLACK);
+			DSurface::Composite->DrawTextA(Modes[i], rect.X, rect.Y, (int)Mode == i ? COLOR_RED : COLOR_WHITE);
+		}
+	}
+
 	return 0;
 }
 
+static void ProcessActions(TActionClass* pAction, TriggerClass* pTrigger, int counter)
+{
+	if (pAction) {
+		switch (Mode)
+		{
+		case ForceRun:
+			pAction->Execute(HouseClass::FindByCountryIndex(pTrigger->Type->House->ArrayIndex), NULL, pTrigger, CellStruct{ 0,0 });
+			break;
+		case Enable:
+		case Disable:
+		default:
+			break;
+		}
+		
+		ProcessActions(pAction->NextAction, pTrigger, counter + 1);
+	}
+}
 
+static void ProcessTriggers(TriggerClass* pTrigger, int counter)
+{
+	if (pTrigger) {
+		switch (Mode)
+		{
+		case ForceRun:
+			ProcessActions(pTrigger->Type->FirstAction, pTrigger, 0);
+			Message(L"Executed trigger <%s>", char2wchar(pTrigger->Type->Name));
+			break;
+		case Enable:
+			pTrigger->Enable();
+			Message(L"Enabled trigger <%s>", char2wchar(pTrigger->Type->Name));
+			break;
+		case Disable:
+			pTrigger->Disable();
+			Message(L"Disabled trigger <%s>", char2wchar(pTrigger->Type->Name));
+			break;
+		case Destroy:
+			pTrigger->Destroy();
+			Message(L"Destroyed trigger <%s>", char2wchar(pTrigger->Type->Name));
+			break;
+		default:
+			break;
+		}
+		//ProcessTriggers(pTrigger->NextTrigger, counter + 1);
+	}
+}
+
+DEFINE_HOOK(69300B, ScrollClass_MouseUpdate_SkipMouseActionUpdate, 6)
+{
+	if (!bTriggerDebug)
+		return 0;
+
+	enum { SkipGameCode = 0x69301A };
+	const Point2D mousePosition = WWMouseClass::Instance->XY1;
+
+	auto isInRect = [&](const RectangleStruct& rect)
+		{
+			return rect.X <= mousePosition.X && mousePosition.X <= rect.X + rect.Width &&
+				rect.Y <= mousePosition.Y && mousePosition.Y <= rect.Y + rect.Height;
+		};
+
+	HoveredTriggerIndex = -100;
+	ModeIndex = -1;
+	for (int i = 0; i < PageTriggerCount; ++i)
+	{
+		if (isInRect(TriggerDebugRect[i]))
+		{
+			HoveredTriggerIndex = i + CurrentPage * PageTriggerCount;
+			R->Stack(STACK_OFFS(0x30, -0x24), 0);
+			R->EAX(Action::None);
+			return SkipGameCode;
+		}
+	}
+	if (isInRect(TriggerDebugPageUp))
+	{
+		HoveredTriggerIndex = -1;
+		R->Stack(STACK_OFFS(0x30, -0x24), 0);
+		R->EAX(Action::None);
+		return SkipGameCode;
+	}
+	if (isInRect(TriggerDebugPageDown))
+	{
+		HoveredTriggerIndex = -2;
+		R->Stack(STACK_OFFS(0x30, -0x24), 0);
+		R->EAX(Action::None);
+		return SkipGameCode;
+	}
+	for (int i = 0; i < Count; ++i)
+	{
+		if (isInRect(TriggerDebugMode[i]))
+		{
+			ModeIndex = i;
+			R->Stack(STACK_OFFS(0x30, -0x24), 0);
+			R->EAX(Action::None);
+			return SkipGameCode;
+		}
+	}
+	return 0;
+}
+
+DEFINE_HOOK(6931A5, ScrollClass_WindowsProcedure_PressLeftMouseButton, 6)
+{
+	enum { SkipGameCode = 0x6931B4 };
+
+	if (!bTriggerDebug)
+		return 0;
+
+	if (HoveredTriggerIndex >= 0)
+	{
+		ProcessTriggers(TriggerClass::Array->GetItem(HoveredTriggerIndex), 0);
+	}
+	else if (HoveredTriggerIndex > -100)
+	{
+		switch (HoveredTriggerIndex)
+		{
+		case -1:
+		{
+			if (CurrentPage > 0)
+			{
+				CurrentPage--;
+			}
+			break;
+		}
+		case -2:
+		{
+			if (!bTriggerDebugPageEnd)
+			{
+				CurrentPage++;
+			}
+			break;
+		}
+		default:
+			break;
+		}
+		bPressedInButtonsLayer = true;
+		R->Stack(STACK_OFFS(0x28, 0x8), 0);
+		R->EAX(Action::None);
+	}
+	else if (ModeIndex > -1)
+	{
+		Mode = CurrentMode(ModeIndex);
+		bPressedInButtonsLayer = true;
+		R->Stack(STACK_OFFS(0x28, 0x8), 0);
+		R->EAX(Action::None);
+	}
+
+	return SkipGameCode;
+}
+
+DEFINE_HOOK(693268, ScrollClass_WindowsProcedure_ReleaseLeftMouseButton, 5)
+{
+	enum { SkipGameCode = 0x693276 };
+
+	if (bPressedInButtonsLayer)
+	{
+		bPressedInButtonsLayer = false;
+		R->Stack(STACK_OFFS(0x28, 0x8), 0);
+		R->EAX(Action::None);
+		return SkipGameCode;
+	}
+
+	return 0;
+}
+
+DEFINE_HOOK(692F85, ScrollClass_MouseUpdate_SkipMouseLongPress, 7)
+{
+	enum { CheckMousePress = 0x692F8E, CheckMouseNoPress = 0x692FDC };
+
+	GET(ScrollClass*, pThis, EBX);
+
+	// 555A: AnyMouseButtonDown
+	return (pThis->unknown_byte_554A && !bPressedInButtonsLayer) ? CheckMousePress : CheckMouseNoPress;
+}
 

@@ -747,7 +747,7 @@ int TechnoClass::GetIonCannonValue(AIDifficulty const difficulty) const {
 	const TypeList<int>* pValues = nullptr;
 	int value = 1;
 
-	if(auto pUnit = abstract_cast<const UnitClass*>(this)) {
+	if(auto pUnit = static_cast<const UnitClass*>(this)) {
 		auto pType = pUnit->Type;
 
 		if(pType->Harvester) {
@@ -763,7 +763,7 @@ int TechnoClass::GetIonCannonValue(AIDifficulty const difficulty) const {
 			value = 2;
 		}
 
-	} else if(auto pBuilding = abstract_cast<const BuildingClass*>(this)) {
+	} else if(auto pBuilding = static_cast<const BuildingClass*>(this)) {
 		auto pType = pBuilding->Type;
 
 		if(pType->Factory == AbstractType::BuildingType) {
@@ -794,7 +794,7 @@ int TechnoClass::GetIonCannonValue(AIDifficulty const difficulty) const {
 			value = 4;
 		}
 
-	} else if(auto pInfantry = abstract_cast<const InfantryClass*>(this)) {
+	} else if(auto pInfantry = static_cast<const InfantryClass*>(this)) {
 		auto pType = pInfantry->Type;
 
 		if(pType->Engineer) {

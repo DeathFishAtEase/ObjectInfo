@@ -662,6 +662,14 @@ public:
 		: HouseClass(noinit_t())
 	{ JMP_THIS(0x4F54A0); }
 
+	bool IsControlledByHuman() const { // { JMP_THIS(0x50B730); }
+		bool result = this->CurrentPlayer;
+		if (SessionClass::Instance->GameMode == GameMode::Campaign) {
+			result = result || this->PlayerControl;
+		}
+		return result;
+	}
+
 protected:
 	explicit __forceinline HouseClass(noinit_t) noexcept
 		: AbstractClass(noinit_t())

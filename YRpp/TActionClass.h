@@ -283,14 +283,24 @@ protected:
 
 public:
 	int                ArrayIndex;
-	TActionClass*      NextAction;
+	TActionClass* NextAction;
 	TriggerAction      ActionKind;
-	TeamTypeClass*     TeamType;
-	RectangleStruct    Bounds; // map bounds for use with action 40
+	TeamTypeClass* TeamType;
+	union
+	{
+		RectangleStruct    Bounds; // map bounds for use with action 40
+		struct
+		{
+			int Param3;
+			int Param4;
+			int Param5;
+			int Param6;
+		};
+	}; // It's enough for calling Bounds.X, just use a union here now. - secsome
 	int                Waypoint;
 	int                Value2; // multipurpose
-	TagTypeClass*      TagType;
-	TriggerTypeClass*  TriggerType;
+	TagTypeClass* TagType;
+	TriggerTypeClass* TriggerType;
 	char               TechnoID[0x19];
 	char               Text[0x20];
 	PROTECTED_PROPERTY(BYTE, align_8D[3]);
