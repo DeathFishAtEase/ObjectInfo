@@ -44,6 +44,18 @@ enum TriggerSort : int
 	ByName,
 	end
 };
+
+class TriggerClassExt
+{
+public:
+	int LastExecutedFrame = -1;
+	int ExecutedCount = 0;
+	std::vector<bool> OccuredEvents;
+	bool Destroyed = false;
+	int DestroyedFrame = -1;
+	TriggerTypeClass* Type = nullptr;
+};
+
 const int TriggerDebugStartX = 10;
 const int TriggerDebugStartY = 180;
 int TriggerDebugStartIndex = 0;
@@ -62,14 +74,10 @@ RectangleStruct TriggerDebugSort{ 0 };
 RectangleStruct TriggerDebugSearch{ 0 };
 
 std::vector<TriggerClass*> SortedTriggerArray;
+std::vector<TriggerClassExt> DestroyedTriggers;
+std::vector<TriggerClassExt> SortedDestroyedTriggers;
+int SortedTriggerCount;
 
-class TriggerClassExt
-{
-public:
-	int LastExecutedFrame = -1;
-	int ExecutedCount = 0;
-	std::vector<bool> OccuredEvents;
-};
 std::map<TriggerClass*, TriggerClassExt> TriggerExtMap;
 
 static std::wstring to_lower(const wchar_t* s) {
@@ -153,6 +161,22 @@ static std::vector<TriggerClass*> match_wchar_patterns(const std::vector<Trigger
 
 	return result;
 }
+static std::vector<TriggerClassExt> match_wchar_patternsExt(const std::vector<TriggerClassExt>& items, const wchar_t* source) {
+	std::vector<TriggerClassExt> result;
+	std::wstring lower_source = to_lower(source);
+	lower_source.erase(0, lower_source.find_first_not_of(L" \t\n\r\f\v"));
+	lower_source.erase(lower_source.find_last_not_of(L" \t\n\r\f\v") + 1);
+
+	for (auto& item : items) {
+		if (!item.Type || !item.Type->ID || !item.Type->Name)
+			continue;
+		std::wstring pattern = to_lower(char2wchar(Format("<Expired> %s (%s)", item.Type->get_ID(), item.Type->Name)));
+		if (pattern.find(lower_source) != std::wstring::npos)
+			result.push_back(item);
+	}
+
+	return result;
+}
 
 static void GetEventList(TEventClass* pEvent, std::vector<int>& List)
 {
@@ -171,12 +195,22 @@ static bool CompareByID(TriggerClass* a, TriggerClass* b) {
 	return std::strcmp(a->Type->get_ID(), b->Type->get_ID()) < 0;
 }
 
+static bool CompareByNameExt(const TriggerClassExt& a, const TriggerClassExt& b) {
+	return std::strcmp(a.Type->Name, b.Type->Name) < 0;
+}
+
+static bool CompareByIDExt(const TriggerClassExt& a, const TriggerClassExt& b) {
+	return std::strcmp(a.Type->get_ID(), b.Type->get_ID()) < 0;
+}
+
 static void SortTriggerArray(TriggerSort sortType)
 {
 	SortedTriggerArray.clear();
+	SortedDestroyedTriggers.clear();
 	for (int i = 0; i < TriggerClass::Array->Count; i++) {
 		SortedTriggerArray.push_back(TriggerClass::Array->GetItem(i));
 	}
+
 	if (bTriggerDebugEdited && !MessageListClass::Instance->HasEditFocus() && wcscmp(SearchPattern, MessageListClass::Instance->GetEditBuffer()) != 0)
 	{
 		bTriggerDebugEdited = false;
@@ -186,6 +220,11 @@ static void SortTriggerArray(TriggerSort sortType)
 	if (wcslen(SearchPattern) > 0)
 	{
 		SortedTriggerArray = match_wchar_patterns(SortedTriggerArray, SearchPattern);
+		SortedDestroyedTriggers = match_wchar_patternsExt(DestroyedTriggers, SearchPattern);
+	}
+	else
+	{
+		SortedDestroyedTriggers = DestroyedTriggers;
 	}
 
 	switch (sortType)
@@ -194,14 +233,17 @@ static void SortTriggerArray(TriggerSort sortType)
 		break;
 	case ByID:
 		std::sort(SortedTriggerArray.begin(), SortedTriggerArray.end(), CompareByID);
+		std::sort(SortedDestroyedTriggers.begin(), SortedDestroyedTriggers.end(), CompareByIDExt);
 		break;
 	case ByName:
 		std::sort(SortedTriggerArray.begin(), SortedTriggerArray.end(), CompareByName);
+		std::sort(SortedDestroyedTriggers.begin(), SortedDestroyedTriggers.end(), CompareByNameExt);
 		break;
 	default:
 		break;
 	}
-	
+
+	SortedTriggerCount = SortedTriggerArray.size() + SortedDestroyedTriggers.size();
 }
 
 class ObjectInfoClass : public CommandClass
@@ -1302,51 +1344,80 @@ DEFINE_HOOK(4F4583, GScreenClass_DrawOnTop_TheDarkSideOfTheMoon, 6)
 			TriggerDebugRect[i] = { 0,0,0,0 };
 		}
 		bTriggerDebugPageEnd = true;
-		for (int i = CurrentPage * PageTriggerCount; i < std::min((int)SortedTriggerArray.size(), (CurrentPage + 1) * PageTriggerCount); i++) {
-			auto trigger = SortedTriggerArray[i];
+		for (int i = CurrentPage * PageTriggerCount; i < std::min((int)SortedTriggerCount, (CurrentPage + 1) * PageTriggerCount); i++) {
 			std::string text;
-
-			text = Format("%s (%s)", trigger->Type->get_ID(), trigger->Type->Name);
-			if (bTriggerDebugDetailed)
+			bool enabled = false;
+			if (i < SortedTriggerArray.size())
 			{
-				int timeLeft = trigger->Enabled ? trigger->Timer.GetTimeLeft() : trigger->Timer.TimeLeft;
-				if (timeLeft > 0)
-				{
-					text += Format(", Time Left(s): %d(%d)", timeLeft, timeLeft / 15);
-				}
-				int lastExecutedFrame = TriggerExtMap[trigger].LastExecutedFrame;
-				if (lastExecutedFrame > -1)
-				{
-					text += Format(", Last Executed Frame(s): %d(%d)", lastExecutedFrame, lastExecutedFrame / 15);
-				}
-				int executedCount = TriggerExtMap[trigger].ExecutedCount;
-				if (executedCount > 0)
-				{
-					text += Format(", Execute Count: %d", executedCount);
-				}
+				auto trigger = SortedTriggerArray[i];
 				if (trigger->Enabled)
+					enabled = true;
+				text = Format("%s (%s)", trigger->Type->get_ID(), trigger->Type->Name);
+				if (bTriggerDebugDetailed)
 				{
-					if (!TriggerExtMap[trigger].OccuredEvents.empty())
+					int timeLeft = trigger->Enabled ? trigger->Timer.GetTimeLeft() : trigger->Timer.TimeLeft;
+					if (timeLeft > 0)
 					{
-						std::vector<int> eventList;
-						GetEventList(trigger->Type->FirstEvent, eventList);
-						text += ", Conditions:";
-						for (int i = eventList.size() - 1; i >= 0; --i)
+						text += Format(", Time Left(s): %d(%d)", timeLeft, timeLeft / 15);
+					}
+					int lastExecutedFrame = TriggerExtMap[trigger].LastExecutedFrame;
+					if (lastExecutedFrame > -1)
+					{
+						text += Format(", Last Executed Frame(s): %d(%d)", lastExecutedFrame, lastExecutedFrame / 15);
+					}
+					int executedCount = TriggerExtMap[trigger].ExecutedCount;
+					if (executedCount > 0)
+					{
+						text += Format(", Execute Count: %d", executedCount);
+					}
+					if (trigger->Enabled)
+					{
+						if (!TriggerExtMap[trigger].OccuredEvents.empty())
 						{
-							text += Format(" %d[%s]", eventList[i], TriggerExtMap[trigger].OccuredEvents[i] ? L"@" : L"  ");
+							std::vector<int> eventList;
+							GetEventList(trigger->Type->FirstEvent, eventList);
+							text += ", Conditions:";
+							for (int i = eventList.size() - 1; i >= 0; --i)
+							{
+								text += Format(" %d[%s]", eventList[i], TriggerExtMap[trigger].OccuredEvents[i] ? L"@" : L"  ");
+							}
 						}
 					}
 				}
 			}
+			else
+			{
+				auto& trigger = SortedDestroyedTriggers[i - SortedTriggerArray.size()];
+				text = Format("<Expired> %s (%s)", trigger.Type->get_ID(), trigger.Type->Name);
+				if (bTriggerDebugDetailed)
+				{
+					int lastExecutedFrame = trigger.LastExecutedFrame;
+					if (lastExecutedFrame > -1)
+					{
+						text += Format(", Last Executed Frame(s): %d(%d)", lastExecutedFrame, lastExecutedFrame / 15);
+					}
+					int executedCount = trigger.ExecutedCount;
+					if (executedCount > 0)
+					{
+						text += Format(", Execute Count: %d", executedCount);
+					}
+					int destroyedFrame = trigger.DestroyedFrame;
+					if (destroyedFrame > 0)
+					{
+						text += Format(", Expired Frame(s): %d(%d)", destroyedFrame, destroyedFrame / 15);
+					}
+				}
+			}
+					
 			if (!DrawText(char2wchar(text.c_str()),
-				DisplayX, DisplayY, COLOR_WHITE, i - CurrentPage * PageTriggerCount, trigger->Enabled ? RGB8882RGB565(0,120,0) : COLOR_BLACK))
+				DisplayX, DisplayY, COLOR_WHITE, i - CurrentPage * PageTriggerCount, enabled ? RGB8882RGB565(0,120,0) : COLOR_BLACK))
 			{
 				if (PageTriggerCount == RECT_COUNT)
 					PageTriggerCount = i - CurrentPage * PageTriggerCount;
 				bTriggerDebugPageEnd = false;
 				break;
 			}
-			if (i == (CurrentPage + 1) * PageTriggerCount - 1 && i != SortedTriggerArray.size() - 1)
+			if (i == (CurrentPage + 1) * PageTriggerCount - 1 && i != SortedTriggerCount - 1)
 				bTriggerDebugPageEnd = false;
 		}
 
@@ -1593,7 +1664,8 @@ DEFINE_HOOK(6931A5, ScrollClass_WindowsProcedure_PressLeftMouseButton, 6)
 
 	if (HoveredTriggerIndex >= 0)
 	{
-		ProcessTriggers(SortedTriggerArray[HoveredTriggerIndex], 0);
+		if (HoveredTriggerIndex < SortedTriggerArray.size())
+			ProcessTriggers(SortedTriggerArray[HoveredTriggerIndex], 0);
 	}
 	else if (HoveredTriggerIndex > -100)
 	{
@@ -1685,6 +1757,7 @@ DEFINE_HOOK(6851F0, Logic_Init, 5)
 	CurrentPage = 0;
 	TriggerExtMap.clear();
 	SortedTriggerArray.clear();
+	DestroyedTriggers.clear();
 	wcscpy(SearchPattern, L"");
 	return 0;
 }
@@ -1710,10 +1783,23 @@ DEFINE_HOOK(7264C0, TriggerClass_RegisterEvent_Clear, 7)
 	}
 	return 0;
 }
-DEFINE_HOOK(726564, TriggerClass_RegisterEvent_ForceRecord, 6)
+
+DEFINE_HOOK(726564, TriggerClass_RegisterEvent_Record, 6)
 {
 	GET(TriggerClass*, pThis, ESI);
 	TriggerExtMap[pThis].OccuredEvents[(int)log2(R->EBP())] = true;
+	return 0;
+}
+
+DEFINE_HOOK(726720, TriggerClass_Destroy, 7)
+{
+	GET(TriggerClass*, pThis, ECX);
+	auto& destroyed = DestroyedTriggers.emplace_back(TriggerExtMap[pThis]);
+
+	destroyed.Destroyed = true;
+	destroyed.DestroyedFrame = Unsorted::CurrentFrame;
+	destroyed.Type = pThis->Type;
+
 	return 0;
 }
 
