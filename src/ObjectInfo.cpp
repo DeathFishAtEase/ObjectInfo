@@ -42,6 +42,9 @@ enum TriggerSort : int
 	Raw = 0,
 	ByID,
 	ByName,
+	ByTimeLeft,
+	ByLastExecuted,
+	ByDestroyed,
 	end
 };
 
@@ -203,6 +206,28 @@ static bool CompareByIDExt(const TriggerClassExt& a, const TriggerClassExt& b) {
 	return std::strcmp(a.Type->get_ID(), b.Type->get_ID()) < 0;
 }
 
+static bool CompareByTimeLeft(TriggerClass* a, TriggerClass* b) {
+	int timeLefta = a->Enabled ? a->Timer.GetTimeLeft() : a->Timer.TimeLeft;
+	int timeLeftb = b->Enabled ? b->Timer.GetTimeLeft() : b->Timer.TimeLeft;
+	if (timeLefta <= 0)
+		timeLefta = INT_MAX;
+	if (timeLeftb <= 0)
+		timeLeftb = INT_MAX;
+	return timeLefta < timeLeftb;
+}
+
+static bool CompareByLastExecuted(TriggerClass* a, TriggerClass* b) {
+	return TriggerExtMap[a].LastExecutedFrame > TriggerExtMap[b].LastExecutedFrame;
+}
+
+static bool CompareByLastExecutedExt(const TriggerClassExt& a, const TriggerClassExt& b) {
+	return a.LastExecutedFrame > b.LastExecutedFrame;
+}
+
+static bool CompareByDestroyed(const TriggerClassExt& a, const TriggerClassExt& b) {
+	return a.DestroyedFrame > b.DestroyedFrame;
+}
+
 static void SortTriggerArray(TriggerSort sortType)
 {
 	SortedTriggerArray.clear();
@@ -238,6 +263,16 @@ static void SortTriggerArray(TriggerSort sortType)
 	case ByName:
 		std::sort(SortedTriggerArray.begin(), SortedTriggerArray.end(), CompareByName);
 		std::sort(SortedDestroyedTriggers.begin(), SortedDestroyedTriggers.end(), CompareByNameExt);
+		break;
+	case ByTimeLeft:
+		std::sort(SortedTriggerArray.begin(), SortedTriggerArray.end(), CompareByTimeLeft);
+		break;
+	case ByLastExecuted:
+		std::sort(SortedTriggerArray.begin(), SortedTriggerArray.end(), CompareByLastExecuted);
+		std::sort(SortedDestroyedTriggers.begin(), SortedDestroyedTriggers.end(), CompareByLastExecutedExt);
+		break;
+	case ByDestroyed:
+		std::sort(SortedDestroyedTriggers.begin(), SortedDestroyedTriggers.end(), CompareByDestroyed);
 		break;
 	default:
 		break;
@@ -1358,7 +1393,7 @@ DEFINE_HOOK(4F4583, GScreenClass_DrawOnTop_TheDarkSideOfTheMoon, 6)
 					int timeLeft = trigger->Enabled ? trigger->Timer.GetTimeLeft() : trigger->Timer.TimeLeft;
 					if (timeLeft > 0)
 					{
-						text += Format(", Time Left(s): %d(%d)", timeLeft, timeLeft / 15);
+						text += Format(", Frame Left(s): %d(%d)", timeLeft, timeLeft / 15);
 					}
 					int lastExecutedFrame = TriggerExtMap[trigger].LastExecutedFrame;
 					if (lastExecutedFrame > -1)
@@ -1436,6 +1471,15 @@ DEFINE_HOOK(4F4583, GScreenClass_DrawOnTop_TheDarkSideOfTheMoon, 6)
 			break;
 		case ByName:
 			SortType += L"Name";
+			break;
+		case ByTimeLeft:
+			SortType += L"Frame Left";
+			break;
+		case ByLastExecuted:
+			SortType += L"Last Executed";
+			break;
+		case ByDestroyed:
+			SortType += L"Expired";
 			break;
 		default:
 			break;
