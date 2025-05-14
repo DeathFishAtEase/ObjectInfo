@@ -241,8 +241,8 @@ static std::vector<TriggerClass*> match_wchar_patterns(const std::vector<Trigger
 static std::vector<TriggerClassExt> match_wchar_patternsExt(const std::vector<TriggerClassExt>& items, const wchar_t* source) {
 	std::vector<TriggerClassExt> result;
 	std::wstring lower_source = to_lower(source);
-	lower_source.erase(0, lower_source.find_first_not_of(L"\t\n\r\f\v"));
-	lower_source.erase(lower_source.find_last_not_of(L"\t\n\r\f\v") + 1);
+	lower_source.erase(0, lower_source.find_first_not_of(L" \t\n\r\f\v"));
+	lower_source.erase(lower_source.find_last_not_of(L" \t\n\r\f\v") + 1);
 
 	bool exclude = false;
 	if (lower_source.front() == L'!' && lower_source.back() == L'!' && lower_source.length() > 2) {
@@ -1461,6 +1461,7 @@ DEFINE_HOOK(4F4583, GScreenClass_DrawOnTop_TheDarkSideOfTheMoon, 6)
 			if (std::holds_alternative<TriggerClass**>(obj.item))
 			{
 				auto trigger = *std::get<TriggerClass**>(obj.item);
+				auto& ext = TriggerExtMap[trigger];
 				if (trigger->Enabled)
 					enabled = true;
 				text = Format("%s (%s)", trigger->Type->get_ID(), trigger->Type->Name);
@@ -1470,27 +1471,29 @@ DEFINE_HOOK(4F4583, GScreenClass_DrawOnTop_TheDarkSideOfTheMoon, 6)
 					if (timeLeft > 0)
 					{
 						text += Format(", Frame Left(s): %d(%d)", timeLeft, timeLeft / 15);
+						if (ext.ResetTimer > -1)
+							text += " (Modified)";
 					}
-					int lastExecutedFrame = TriggerExtMap[trigger].LastExecutedFrame;
+					int lastExecutedFrame = ext.LastExecutedFrame;
 					if (lastExecutedFrame > -1)
 					{
 						text += Format(", Last Executed Frame(s): %d(%d)", lastExecutedFrame, lastExecutedFrame / 15);
 					}
-					int executedCount = TriggerExtMap[trigger].ExecutedCount;
+					int executedCount = ext.ExecutedCount;
 					if (executedCount > 0)
 					{
 						text += Format(", Execute Count: %d", executedCount);
 					}
 					if (trigger->Enabled)
 					{
-						if (!TriggerExtMap[trigger].OccuredEvents.empty())
+						if (!ext.OccuredEvents.empty())
 						{
 							std::vector<int> eventList;
 							GetEventList(trigger->Type->FirstEvent, eventList);
 							text += ", Conditions:";
 							for (int i = eventList.size() - 1; i >= 0; --i)
 							{
-								text += Format(" %d[%s]", eventList[i], TriggerExtMap[trigger].OccuredEvents[i] ? L"@" : L"  ");
+								text += Format(" %d[%s]", eventList[i], ext.OccuredEvents[i] ? L"@" : L"  ");
 							}
 						}
 					}
@@ -1830,6 +1833,16 @@ DEFINE_HOOK(6931A5, ScrollClass_WindowsProcedure_PressLeftMouseButton, 6)
 			if (std::holds_alternative<TriggerClass**>(obj.item))
 			{
 				ProcessTriggers(*std::get<TriggerClass**>(obj.item), 0);
+			}
+			else
+			{
+				auto& ext = *std::get<TriggerClassExt*>(obj.item);
+				if (ext.Type)
+				{
+					auto newTrigger = TriggerClass::GetInstance(ext.Type);
+					ProcessTriggers(newTrigger, 0);
+					newTrigger->Destroy();
+				}
 			}
 		}
 	}
