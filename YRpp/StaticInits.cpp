@@ -199,8 +199,6 @@ ALIAS(const CLSID, LocomotionClass::CLSIDs::Mech, 0x7E9AA0);
 ALIAS(const CLSID, LocomotionClass::CLSIDs::Ship, 0x7E9AB0);
 
 #include <MessageListClass.h>
-ALIAS_O(MessageListClass * const, MessageListClass::Instance, 0xA8BC60);
-
 #include <MixFileClass.h>
 List<MixFileClass*>* const MixFileClass::MIXes = (List<MixFileClass*>* )0xABEFD8;
 DECL(MixFileClass, 0x884D90);
