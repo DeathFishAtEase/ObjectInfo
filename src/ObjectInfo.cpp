@@ -1838,10 +1838,24 @@ DEFINE_HOOK(6931A5, ScrollClass_WindowsProcedure_PressLeftMouseButton, 6)
 			{
 				auto& ext = *std::get<TriggerClassExt*>(obj.item);
 				if (ext.Type)
-				{
-					auto newTrigger = TriggerClass::GetInstance(ext.Type);
-					ProcessTriggers(newTrigger, 0);
-					newTrigger->Destroy();
+				{		
+					switch (Mode)
+					{
+					case ForceRun:
+					{
+						auto newTrigger = TriggerClass::GetInstance(ext.Type);
+						ProcessTriggers(newTrigger, 0);
+						newTrigger->Destroy();
+						break;
+					}
+					// new trigger does not allocate tag 
+					case Enable:
+					case Disable:
+					case Destroy:
+					case ChangeTimer:
+					default:
+						break;
+					}
 				}
 			}
 		}
