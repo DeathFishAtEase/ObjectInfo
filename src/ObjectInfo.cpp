@@ -13,6 +13,7 @@
 #include <cwchar>
 #include <cwctype>
 #include <algorithm>
+#include <variant>
 
 #define COLOR_ALLIEDTT 0xA69F
 #define COLOR_SOVIETTT 0xFFE0
@@ -23,6 +24,7 @@ bool bPressedInButtonsLayer = false;
 bool bTriggerDebugPageEnd = false;
 bool bTriggerDebugDetailed = false;
 bool bTriggerDebugEdited = false;
+bool bTriggerDebugTimerEdited = false;
 
 char FinalStringBuffer[0x1000];
 wchar_t FinalStringBufferW[0x1000];
@@ -35,6 +37,7 @@ enum CurrentMode : int
 	Enable,
 	Disable,
 	Destroy,
+	ChangeTimer,
 	Count
 };
 enum TriggerSort : int
@@ -57,6 +60,7 @@ public:
 	bool Destroyed = false;
 	int DestroyedFrame = -1;
 	TriggerTypeClass* Type = nullptr;
+	int ResetTimer = -1;
 };
 
 const int TriggerDebugStartX = 10;
@@ -68,6 +72,7 @@ int CurrentPage = 0;
 CurrentMode Mode = ForceRun;
 TriggerSort Sort = Raw;
 int ModeIndex = -1;
+int ChangedTimer = 0;
 RectangleStruct TriggerDebugRect[RECT_COUNT]{0};
 RectangleStruct TriggerDebugMode[Count]{0};
 RectangleStruct TriggerDebugPageDown{ 0 };
@@ -75,13 +80,69 @@ RectangleStruct TriggerDebugPageUp{ 0 };
 RectangleStruct TriggerDebugDetailed{ 0 };
 RectangleStruct TriggerDebugSort{ 0 };
 RectangleStruct TriggerDebugSearch{ 0 };
+RectangleStruct TriggerDebugEnableModified{ 0 };
 
 std::vector<TriggerClass*> SortedTriggerArray;
 std::vector<TriggerClassExt> DestroyedTriggers;
 std::vector<TriggerClassExt> SortedDestroyedTriggers;
-int SortedTriggerCount;
 
 std::map<TriggerClass*, TriggerClassExt> TriggerExtMap;
+
+using TriggerVariant = std::variant<TriggerClass**, TriggerClassExt*>;
+struct ComparableTrigger {
+	TriggerVariant item;
+
+	auto getName() const {
+		return std::visit([](auto* obj) {
+			if constexpr (std::is_same_v<std::decay_t<decltype(*obj)>, TriggerClass*>) {
+				return (*obj)->Type->Name;
+			}
+			else
+				return obj->Type->Name;
+			}, item);
+	}
+	auto getID() const {
+		return std::visit([](auto* obj) {
+			if constexpr (std::is_same_v<std::decay_t<decltype(*obj)>, TriggerClass*>) {
+				return (*obj)->Type->ID;
+			}
+			else
+				return obj->Type->ID;
+			}, item);
+	}
+	auto getTimeLeft() const {
+		return std::visit([](auto* obj) {
+			if constexpr (std::is_same_v<std::decay_t<decltype(*obj)>, TriggerClass*>) {
+				int timeLeft = (*obj)->Enabled ? (*obj)->Timer.GetTimeLeft() : (*obj)->Timer.TimeLeft;
+				if (timeLeft <= 0)
+					timeLeft = INT_MAX;
+				return timeLeft;
+			}
+			else
+				return INT_MAX;
+			}, item);
+	}
+	auto getLastExecuted() const {
+		return std::visit([](auto* obj) {
+			if constexpr (std::is_same_v<std::decay_t<decltype(*obj)>, TriggerClass*>) {
+				return TriggerExtMap[*obj].LastExecutedFrame;
+			}
+			else
+				return obj->LastExecutedFrame;
+			}, item);
+	}
+	auto getDestroyed() const {
+		return std::visit([](auto* obj) {
+			if constexpr (std::is_same_v<std::decay_t<decltype(*obj)>, TriggerClass*>) {
+				return -1;
+			}
+			else
+				return obj->DestroyedFrame;
+			}, item);
+	}
+};
+
+std::vector<ComparableTrigger> SortedAllTriggers;
 
 static std::wstring to_lower(const wchar_t* s) {
 	std::wstring result;
@@ -154,28 +215,53 @@ static std::vector<TriggerClass*> match_wchar_patterns(const std::vector<Trigger
 	lower_source.erase(0, lower_source.find_first_not_of(L" \t\n\r\f\v"));
 	lower_source.erase(lower_source.find_last_not_of(L" \t\n\r\f\v") + 1);
 
+	bool exclude = false;
+	if (lower_source.front() == L'!' && lower_source.back() == L'!' && lower_source.length() > 2) {
+		lower_source = lower_source.substr(1, lower_source.length() - 2);
+		exclude = true;
+	}
+
 	for (auto item : items) {
 		if (!item || !item->Type || !item->Type->ID || !item->Type->Name)
 			continue;
 		std::wstring pattern = to_lower(char2wchar(Format("%s (%s)", item->Type->get_ID(), item->Type->Name)));
-		if (pattern.find(lower_source) != std::wstring::npos)
-			result.push_back(item);
+		if (exclude) {
+			if (pattern.find(lower_source) == std::wstring::npos)
+				result.push_back(item);
+		}
+		else {
+			if (pattern.find(lower_source) != std::wstring::npos)
+				result.push_back(item);
+		}
 	}
 
 	return result;
 }
+
 static std::vector<TriggerClassExt> match_wchar_patternsExt(const std::vector<TriggerClassExt>& items, const wchar_t* source) {
 	std::vector<TriggerClassExt> result;
 	std::wstring lower_source = to_lower(source);
-	lower_source.erase(0, lower_source.find_first_not_of(L" \t\n\r\f\v"));
-	lower_source.erase(lower_source.find_last_not_of(L" \t\n\r\f\v") + 1);
+	lower_source.erase(0, lower_source.find_first_not_of(L"\t\n\r\f\v"));
+	lower_source.erase(lower_source.find_last_not_of(L"\t\n\r\f\v") + 1);
+
+	bool exclude = false;
+	if (lower_source.front() == L'!' && lower_source.back() == L'!' && lower_source.length() > 2) {
+		lower_source = lower_source.substr(1, lower_source.length() - 2);
+		exclude = true;
+	}
 
 	for (auto& item : items) {
 		if (!item.Type || !item.Type->ID || !item.Type->Name)
 			continue;
 		std::wstring pattern = to_lower(char2wchar(Format("<Expired> %s (%s)", item.Type->get_ID(), item.Type->Name)));
-		if (pattern.find(lower_source) != std::wstring::npos)
-			result.push_back(item);
+		if (exclude) {
+			if (pattern.find(lower_source) == std::wstring::npos)
+				result.push_back(item);
+		}
+		else {
+			if (pattern.find(lower_source) != std::wstring::npos)
+				result.push_back(item);
+		}
 	}
 
 	return result;
@@ -190,48 +276,11 @@ static void GetEventList(TEventClass* pEvent, std::vector<int>& List)
 	}
 }
 
-static bool CompareByName(TriggerClass* a, TriggerClass* b) {
-	return std::strcmp(a->Type->Name, b->Type->Name) < 0;
-}
-
-static bool CompareByID(TriggerClass* a, TriggerClass* b) {
-	return std::strcmp(a->Type->get_ID(), b->Type->get_ID()) < 0;
-}
-
-static bool CompareByNameExt(const TriggerClassExt& a, const TriggerClassExt& b) {
-	return std::strcmp(a.Type->Name, b.Type->Name) < 0;
-}
-
-static bool CompareByIDExt(const TriggerClassExt& a, const TriggerClassExt& b) {
-	return std::strcmp(a.Type->get_ID(), b.Type->get_ID()) < 0;
-}
-
-static bool CompareByTimeLeft(TriggerClass* a, TriggerClass* b) {
-	int timeLefta = a->Enabled ? a->Timer.GetTimeLeft() : a->Timer.TimeLeft;
-	int timeLeftb = b->Enabled ? b->Timer.GetTimeLeft() : b->Timer.TimeLeft;
-	if (timeLefta <= 0)
-		timeLefta = INT_MAX;
-	if (timeLeftb <= 0)
-		timeLeftb = INT_MAX;
-	return timeLefta < timeLeftb;
-}
-
-static bool CompareByLastExecuted(TriggerClass* a, TriggerClass* b) {
-	return TriggerExtMap[a].LastExecutedFrame > TriggerExtMap[b].LastExecutedFrame;
-}
-
-static bool CompareByLastExecutedExt(const TriggerClassExt& a, const TriggerClassExt& b) {
-	return a.LastExecutedFrame > b.LastExecutedFrame;
-}
-
-static bool CompareByDestroyed(const TriggerClassExt& a, const TriggerClassExt& b) {
-	return a.DestroyedFrame > b.DestroyedFrame;
-}
-
 static void SortTriggerArray(TriggerSort sortType)
 {
 	SortedTriggerArray.clear();
 	SortedDestroyedTriggers.clear();
+	SortedAllTriggers.clear();
 	for (int i = 0; i < TriggerClass::Array->Count; i++) {
 		SortedTriggerArray.push_back(TriggerClass::Array->GetItem(i));
 	}
@@ -252,33 +301,52 @@ static void SortTriggerArray(TriggerSort sortType)
 		SortedDestroyedTriggers = DestroyedTriggers;
 	}
 
+	for (auto& item : SortedTriggerArray)
+	{
+		SortedAllTriggers.push_back(ComparableTrigger{ &item });
+	}
+	for (auto& item : SortedDestroyedTriggers)
+	{
+		SortedAllTriggers.push_back(ComparableTrigger{ &item });
+	}
+
 	switch (sortType)
 	{
 	case Raw:
 		break;
 	case ByID:
-		std::sort(SortedTriggerArray.begin(), SortedTriggerArray.end(), CompareByID);
-		std::sort(SortedDestroyedTriggers.begin(), SortedDestroyedTriggers.end(), CompareByIDExt);
+		std::sort(SortedAllTriggers.begin(), SortedAllTriggers.end(),
+			[](const ComparableTrigger& lhs, const ComparableTrigger& rhs) {
+			return lhs.getID() < rhs.getID();
+			});
 		break;
 	case ByName:
-		std::sort(SortedTriggerArray.begin(), SortedTriggerArray.end(), CompareByName);
-		std::sort(SortedDestroyedTriggers.begin(), SortedDestroyedTriggers.end(), CompareByNameExt);
+		std::sort(SortedAllTriggers.begin(), SortedAllTriggers.end(),
+			[](const ComparableTrigger& lhs, const ComparableTrigger& rhs) {
+				return lhs.getName() < rhs.getName();
+			});
 		break;
 	case ByTimeLeft:
-		std::sort(SortedTriggerArray.begin(), SortedTriggerArray.end(), CompareByTimeLeft);
+		std::sort(SortedAllTriggers.begin(), SortedAllTriggers.end(),
+			[](const ComparableTrigger& lhs, const ComparableTrigger& rhs) {
+				return lhs.getTimeLeft() < rhs.getTimeLeft();
+			});
 		break;
 	case ByLastExecuted:
-		std::sort(SortedTriggerArray.begin(), SortedTriggerArray.end(), CompareByLastExecuted);
-		std::sort(SortedDestroyedTriggers.begin(), SortedDestroyedTriggers.end(), CompareByLastExecutedExt);
+		std::sort(SortedAllTriggers.begin(), SortedAllTriggers.end(),
+			[](const ComparableTrigger& lhs, const ComparableTrigger& rhs) {
+				return lhs.getLastExecuted() > rhs.getLastExecuted();
+			});
 		break;
 	case ByDestroyed:
-		std::sort(SortedDestroyedTriggers.begin(), SortedDestroyedTriggers.end(), CompareByDestroyed);
+		std::sort(SortedAllTriggers.begin(), SortedAllTriggers.end(),
+			[](const ComparableTrigger& lhs, const ComparableTrigger& rhs) {
+				return lhs.getDestroyed() > rhs.getDestroyed();
+			});
 		break;
 	default:
 		break;
 	}
-
-	SortedTriggerCount = SortedTriggerArray.size() + SortedDestroyedTriggers.size();
 }
 
 class ObjectInfoClass : public CommandClass
@@ -1379,12 +1447,20 @@ DEFINE_HOOK(4F4583, GScreenClass_DrawOnTop_TheDarkSideOfTheMoon, 6)
 			TriggerDebugRect[i] = { 0,0,0,0 };
 		}
 		bTriggerDebugPageEnd = true;
-		for (int i = CurrentPage * PageTriggerCount; i < std::min((int)SortedTriggerCount, (CurrentPage + 1) * PageTriggerCount); i++) {
+
+		if (bTriggerDebugTimerEdited && !MessageListClass::Instance->HasEditFocus())
+		{
+			bTriggerDebugTimerEdited = false;
+			ChangedTimer = _wtoi(MessageListClass::Instance->GetEditBuffer());
+		}
+
+		for (int i = CurrentPage * PageTriggerCount; i < std::min((int)SortedAllTriggers.size(), (CurrentPage + 1) * PageTriggerCount); i++) {
 			std::string text;
 			bool enabled = false;
-			if (i < SortedTriggerArray.size())
+			auto& obj = SortedAllTriggers[i];
+			if (std::holds_alternative<TriggerClass**>(obj.item))
 			{
-				auto trigger = SortedTriggerArray[i];
+				auto trigger = *std::get<TriggerClass**>(obj.item);
 				if (trigger->Enabled)
 					enabled = true;
 				text = Format("%s (%s)", trigger->Type->get_ID(), trigger->Type->Name);
@@ -1422,7 +1498,7 @@ DEFINE_HOOK(4F4583, GScreenClass_DrawOnTop_TheDarkSideOfTheMoon, 6)
 			}
 			else
 			{
-				auto& trigger = SortedDestroyedTriggers[i - SortedTriggerArray.size()];
+				auto& trigger = *std::get<TriggerClassExt*>(obj.item);
 				text = Format("<Expired> %s (%s)", trigger.Type->get_ID(), trigger.Type->Name);
 				if (bTriggerDebugDetailed)
 				{
@@ -1452,7 +1528,7 @@ DEFINE_HOOK(4F4583, GScreenClass_DrawOnTop_TheDarkSideOfTheMoon, 6)
 				bTriggerDebugPageEnd = false;
 				break;
 			}
-			if (i == (CurrentPage + 1) * PageTriggerCount - 1 && i != SortedTriggerCount - 1)
+			if (i == (CurrentPage + 1) * PageTriggerCount - 1 && i != SortedAllTriggers.size() - 1)
 				bTriggerDebugPageEnd = false;
 		}
 
@@ -1485,6 +1561,7 @@ DEFINE_HOOK(4F4583, GScreenClass_DrawOnTop_TheDarkSideOfTheMoon, 6)
 			break;
 		}
 		const wchar_t* Search = L"Search";
+		const wchar_t* EnableChanged = L"Enable Timer-modified";
 		int upRight = 0;
 		{
 			auto wanted = Drawing::GetTextDimensions(pageUp);
@@ -1540,11 +1617,22 @@ DEFINE_HOOK(4F4583, GScreenClass_DrawOnTop_TheDarkSideOfTheMoon, 6)
 
 			DSurface::Composite->FillRect(&rect, COLOR_BLACK);
 			DSurface::Composite->DrawTextA(Search, rect.X, rect.Y, COLOR_WHITE);
+		}		
+		{
+			auto wanted = Drawing::GetTextDimensions(EnableChanged);
+			wanted.Height += 2;
+
+			RectangleStruct rect = { upRight + 10 , TriggerDebugStartY - wanted.Height, wanted.Width, wanted.Height };
+			TriggerDebugEnableModified = rect;
+			upRight = rect.X + wanted.Width;
+
+			DSurface::Composite->FillRect(&rect, COLOR_BLACK);
+			DSurface::Composite->DrawTextA(EnableChanged, rect.X, rect.Y, COLOR_WHITE);
 		}
 
 		const wchar_t* Modes[Count] =
 		{
-			L"Run", L"Enable", L"Disable", L"Destroy"
+			L"Run", L"Enable", L"Disable", L"Destroy", L"Set Timer"
 		};
 		int modesRight[Count]{ 0 };
 		for (int i = 0; i < Count; ++i)
@@ -1598,9 +1686,17 @@ static void ProcessTriggers(TriggerClass* pTrigger, int counter)
 			Message(L"Executed trigger <%s>", char2wchar(pTrigger->Type->Name));
 			break;
 		case Enable:
+		{
 			pTrigger->Enable();
+			auto& ext = TriggerExtMap[pTrigger];
+			if (ext.ResetTimer > -1)
+			{
+				pTrigger->Timer.TimeLeft = ext.ResetTimer;
+				ext.ResetTimer = -1;
+			}
 			Message(L"Enabled trigger <%s>", char2wchar(pTrigger->Type->Name));
 			break;
+		}
 		case Disable:
 			pTrigger->Disable();
 			Message(L"Disabled trigger <%s>", char2wchar(pTrigger->Type->Name));
@@ -1608,6 +1704,19 @@ static void ProcessTriggers(TriggerClass* pTrigger, int counter)
 		case Destroy:
 			pTrigger->Destroy();
 			Message(L"Destroyed trigger <%s>", char2wchar(pTrigger->Type->Name));
+			break;
+		case ChangeTimer:
+			if (pTrigger->Enabled)
+			{
+				int elapsed = pTrigger->Timer.TimeLeft - pTrigger->Timer.GetTimeLeft();
+				pTrigger->Timer.TimeLeft = ChangedTimer + elapsed;
+			}
+			else
+			{
+				pTrigger->Timer.TimeLeft = ChangedTimer;
+				TriggerExtMap[pTrigger].ResetTimer = ChangedTimer;
+			}
+			Message(L"Set trigger <%s> timer to %d", char2wchar(pTrigger->Type->Name), ChangedTimer);
 			break;
 		default:
 			break;
@@ -1686,6 +1795,13 @@ DEFINE_HOOK(69300B, ScrollClass_MouseUpdate_SkipMouseActionUpdate, 6)
 		R->EAX(Action::None);
 		return SkipGameCode;
 	}
+	if (isInRect(TriggerDebugEnableModified))
+	{
+		HoveredTriggerIndex = -6;
+		R->Stack(STACK_OFFS(0x30, -0x24), 0);
+		R->EAX(Action::None);
+		return SkipGameCode;
+	}
 	for (int i = 0; i < Count; ++i)
 	{
 		if (isInRect(TriggerDebugMode[i]))
@@ -1708,8 +1824,14 @@ DEFINE_HOOK(6931A5, ScrollClass_WindowsProcedure_PressLeftMouseButton, 6)
 
 	if (HoveredTriggerIndex >= 0)
 	{
-		if (HoveredTriggerIndex < SortedTriggerArray.size())
-			ProcessTriggers(SortedTriggerArray[HoveredTriggerIndex], 0);
+		if (HoveredTriggerIndex < SortedAllTriggers.size())
+		{
+			auto& obj = SortedAllTriggers[HoveredTriggerIndex];
+			if (std::holds_alternative<TriggerClass**>(obj.item))
+			{
+				ProcessTriggers(*std::get<TriggerClass**>(obj.item), 0);
+			}
+		}
 	}
 	else if (HoveredTriggerIndex > -100)
 	{
@@ -1753,6 +1875,21 @@ DEFINE_HOOK(6931A5, ScrollClass_WindowsProcedure_PressLeftMouseButton, 6)
 			}
 			break;
 		}
+		case -6:
+		{
+			for (int i = 0; i < TriggerClass::Array->Count; i++) {
+				auto pTrigger = TriggerClass::Array->GetItem(i);
+				auto& ext = TriggerExtMap[pTrigger];
+				if (ext.ResetTimer > -1)
+				{
+					pTrigger->Enable();
+					pTrigger->Timer.TimeLeft = ext.ResetTimer;
+					ext.ResetTimer = -1;
+				}
+			}
+			Message(L"Enabled all triggers with modified timer");
+			break;
+		}
 		default:
 			break;
 		}
@@ -1764,6 +1901,12 @@ DEFINE_HOOK(6931A5, ScrollClass_WindowsProcedure_PressLeftMouseButton, 6)
 	{
 		Mode = CurrentMode(ModeIndex);
 		bPressedInButtonsLayer = true;
+		if (Mode == ChangeTimer && !MessageListClass::Instance->HasEditFocus())
+		{
+			MessageListClass::Instance->RemoveEdit();
+			MessageListClass::Instance->AddEdit(0, TextPrintType::BrightColor, L"");
+			bTriggerDebugTimerEdited = true;
+		}
 		R->Stack(STACK_OFFS(0x28, 0x8), 0);
 		R->EAX(Action::None);
 	}
@@ -1802,7 +1945,6 @@ DEFINE_HOOK(6851F0, Logic_Init, 5)
 	TriggerExtMap.clear();
 	SortedTriggerArray.clear();
 	DestroyedTriggers.clear();
-	wcscpy(SearchPattern, L"");
 	return 0;
 }
 
