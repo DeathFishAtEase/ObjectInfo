@@ -1154,7 +1154,8 @@ DEFINE_HOOK(4F4583, GScreenClass_DrawOnTop_TheDarkSideOfTheMoon, 6)
 										sprintf(veterancy, "%s", "Elite");
 									else
 										sprintf(veterancy, "%s", "N/A");
-									append("Veterancy = %s (%.2f)", veterancy, pFoot->Veterancy.Veterancy);
+									double truncatedVet = floor(pFoot->Veterancy.Veterancy * 100) / 100.0;
+									append("Veterancy = %s (%.2f)", veterancy, truncatedVet);
 									display();
 								}
 							}
